@@ -11,16 +11,27 @@ RestartCounter_max = 1_000_000
 # Accounts
 LedgerStats = 1000
 LedgerTickets = 2000
-RestartCounter_spent = tb.Account(id=1000, ledger=LedgerStats, code=10)
+
 RestartCounter_budget = tb.Account(id=1005, ledger=LedgerStats, code=10)
-Class_A_first_n_spent = tb.Account(id=2110, ledger=LedgerTickets, code=20)
+RestartCounter_spent = tb.Account(id=1000, ledger=LedgerStats, code=10,
+    flags = tb.AccountFlags.CREDITS_MUST_NOT_EXCEED_DEBITS)
+
 Class_A_first_n_budget = tb.Account(id=2115, ledger=LedgerTickets, code=20)
-Class_A_spent = tb.Account(id=2120, ledger=LedgerTickets, code=20)
+Class_A_first_n_spent = tb.Account(id=2110, ledger=LedgerTickets, code=20,
+    flags = tb.AccountFlags.CREDITS_MUST_NOT_EXCEED_DEBITS)
+
 Class_A_budget = tb.Account(id=2125, ledger=LedgerTickets, code=20)
-Class_B_first_n_spent = tb.Account(id=2210, ledger=LedgerTickets, code=20)
+Class_A_spent = tb.Account(id=2120, ledger=LedgerTickets, code=20,
+    flags = tb.AccountFlags.CREDITS_MUST_NOT_EXCEED_DEBITS)
+
+
 Class_B_first_n_budget = tb.Account(id=2215, ledger=LedgerTickets, code=20)
-Class_B_spent = tb.Account(id=2220, ledger=LedgerTickets, code=20)
+Class_B_first_n_spent = tb.Account(id=2210, ledger=LedgerTickets, code=20,
+    flags = tb.AccountFlags.CREDITS_MUST_NOT_EXCEED_DEBITS)
+
 Class_B_budget = tb.Account(id=2225, ledger=LedgerTickets, code=20)
+Class_B_spent = tb.Account(id=2220, ledger=LedgerTickets, code=20,
+    flags = tb.AccountFlags.CREDITS_MUST_NOT_EXCEED_DEBITS)
 
 
 def create_accounts(client):
