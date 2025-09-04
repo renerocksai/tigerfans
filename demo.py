@@ -42,6 +42,11 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from jinja2 import Environment, DictLoader, select_autoescape
 from fastapi.responses import HTMLResponse  # you already have this
 
+
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+templates = Jinja2Templates(directory="templates")
+
 from sqlalchemy import (
     Column,
     Integer,
@@ -89,157 +94,6 @@ if DATABASE_URL.startswith("sqlite"):
 SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False, future=True)
 Base = declarative_base()
 
-# ----------------------------
-# Jinja2 in-memory templates (no files needed)
-# ----------------------------
-TEMPLATES = {
-    "checkout.html": r"""
-    <html>
-      <head><meta charset='utf-8'><title>Demo Checkout</title></head>
-      <body style="font-family:system-ui;margin:2rem">
-        <h3>Demo Checkout</h3>
-        {% if status %}<p><strong>Last payment:</strong> {{ status|upper }}</p>{% endif %}
-        <form id="f">
-          <label>Class: <select name="cls"><option value="A">A</option><option value="B">B</option></select></label>
-          <label>Quantity: <input type="number" name="qty" value="1" min="1"/></label>
-          <label>Email: <input name="customer_email" placeholder="alice@example.com"/></label>
-          <button type="submit">Pay now (Mock)</button>
-        </form>
-        <script>
-          const f = document.getElementById('f');
-          f.onsubmit = async (e) => {
-            e.preventDefault();
-            const data = Object.fromEntries(new FormData(f).entries());
-            data.qty = parseInt(data.qty, 10);
-            const res = await fetch('/api/checkout', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(data)});
-            const j = await res.json();
-            if (j.redirect_url) window.location = j.redirect_url; else alert(JSON.stringify(j));
-          };
-        </script>
-      </body>
-    </html>
-    """,
-
-    "success.html": r"""
-    <html>
-      <head><meta charset='utf-8'><title>Payment Success</title></head>
-      <body style="font-family:system-ui;margin:2rem">
-        <h3>Thanks! Checking your payment…</h3>
-        <div id="status">Order: {{ order_id }}</div>
-        <div id="tickets"></div>
-        <p><a href="/admin" target="_blank">Open Admin</a> · <a href="/demo/checkout">Back to Checkout</a></p>
-        <script>
-          const orderId = {{ order_id|tojson }};
-          async function tick() {
-            const res = await fetch(`/api/orders/${orderId}`);
-            const j = await res.json();
-            document.getElementById('status').innerText = `Status: ${j.status}`;
-            if (j.status === 'PAID') {
-              const t = j.tickets || [];
-              document.getElementById('tickets').innerHTML =
-                `<h4>Tickets</h4><ul>` + t.map(x => `<li>${x}</li>`).join('') + `</ul>` +
-                (j.got_goodie ? '<p>🎁 Goodie granted!</p>' : '');
-              clearInterval(timer);
-            } else if (j.status === 'PAID_UNFULFILLED') {
-              document.getElementById('tickets').innerHTML =
-                '<p>Payment received but tickets are no longer available. Our team will reconcile or refund.</p>';
-              clearInterval(timer);
-            } else if (j.status === 'FAILED' || j.status === 'CANCELED') {
-              document.getElementById('tickets').innerHTML =
-                '<p>Payment did not complete (reservation expired or canceled).</p>';
-              clearInterval(timer);
-            }
-          }
-          const timer = setInterval(tick, 1000);
-          tick();
-        </script>
-      </body>
-    </html>
-    """,
-
-    "mockpay.html": r"""
-    <html>
-      <head>
-        <meta charset='utf-8'/>
-        <title>MockPay – Demo Payment</title>
-        <style>
-          body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 2rem; }
-          .wrap { max-width: 640px; }
-          button { padding: .6rem 1rem; margin-right: .5rem; }
-          .meta { color:#555; }
-          .card { border:1px solid #ddd; padding: 1rem; border-radius: 12px; }
-        </style>
-      </head>
-      <body>
-        <div class="wrap">
-          <h2>MockPay – Demo Payment</h2>
-          <div class="card">
-            <p><strong>Order:</strong> {{ order_id }}</p>
-            <p><strong>Class:</strong> {{ cls }} &nbsp; <strong>Quantity:</strong> {{ qty }}</p>
-            <p><strong>Amount:</strong> EUR {{ amount_eur }}</p>
-            <form method="post" action="/mockpay/{{ psid }}/emit">
-              <button name="t" value="succeeded">Success</button>
-              <button name="t" value="failed">Fail</button>
-              <button name="t" value="canceled">Cancel</button>
-            </form>
-            <p class="meta">This page simulates a payment provider. Clicking a button sends a signed webhook to <code>{{ webhook_url }}</code>.</p>
-          </div>
-        </div>
-      </body>
-    </html>
-    """,
-
-    "admin.html": r"""
-    <html>
-      <head>
-        <meta charset='utf-8'/>
-        <title>Admin</title>
-        <meta http-equiv="refresh" content="3">
-        <style>
-          body { font-family: system-ui; margin: 2rem; }
-          table { border-collapse: collapse; width: 100%; }
-          th, td { border: 1px solid #ddd; padding: .5rem; text-align: left; }
-          th { background:#f7f7f7; }
-          .cards { display:flex; gap:1rem; margin-bottom:1rem; }
-          .card { border:1px solid #ddd; border-radius:12px; padding:1rem; }
-          .st-PAID { background: #f3fff5; }
-          .st-FAILED, .st-CANCELED { background: #fff5f5; }
-          .st-PAID_UNFULFILLED { background: #fffaf0; }
-          code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
-        </style>
-      </head>
-      <body>
-        <h2>Admin</h2>
-        <div class="cards">
-          <div class="card"><strong>Goodies A used:</strong> {{ goodies_a }} / {{ goodie_limit }}</div>
-          <div class="card"><strong>Goodies B used:</strong> {{ goodies_b }} / {{ goodie_limit }}</div>
-        </div>
-        <table>
-          <thead><tr><th>Order</th><th>Status</th><th>Class</th><th>Qty</th><th>Amount</th><th>Paid at</th><th>Goodie</th></tr></thead>
-          <tbody>
-            {% for o in orders %}
-              <tr class="st-{{ o.status }}">
-                <td><code>{{ o.id[:8] }}</code></td>
-                <td>{{ o.status }}</td>
-                <td>{{ o.cls }}</td>
-                <td>{{ o.qty }}</td>
-                <td>EUR {{ '%.2f' % (o.amount/100) }}</td>
-                <td>{{ o.paid_at_iso or '-' }}</td>
-                <td>{{ 'yes' if o.got_goodie else 'no' }}</td>
-              </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </body>
-    </html>
-    """,
-}
-
-env = Environment(loader=DictLoader(TEMPLATES), autoescape=select_autoescape(["html"]))
-
-def render_template(name: str, **ctx) -> HTMLResponse:
-    tpl = env.get_template(name)
-    return HTMLResponse(tpl.render(**ctx))
 
 # ----------------------------
 # ORM models
@@ -408,10 +262,28 @@ def tb_try_grant_goodie(db: Session, ticket_class: str, user_id: str, order_id: 
     db.commit()
     return True
 
+
 # ----------------------------
 # FastAPI app
 # ----------------------------
 app = FastAPI(title="Ticketing Demo with MockPay & TigerBeetle stubs (SQLite)")
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# ----------------------------
+# Landing page
+# ----------------------------
+@app.get("/", response_class=HTMLResponse)
+async def landing_page(request: Request):
+    return templates.TemplateResponse(
+        "landing.html",
+        {
+            "request": request,
+            "site_name": "TigerFans",
+            "conf_date": "Dec 3–4, 2025",
+            "conf_tagline": "A conference for people who love fast, correct systems.",
+        },
+    )
+
 
 # ----------------------------
 # API: Create Reservation
@@ -602,21 +474,26 @@ async def payments_webhook(request: Request, db: Session = Depends(get_db)):
 # ----------------------------
 # MockPay UI (simple page with 3 buttons)
 # ----------------------------
+# MockPay
 @app.get("/mockpay/{psid}", response_class=HTMLResponse)
-async def mockpay_screen(psid: str, db: Session = Depends(get_db)):
+async def mockpay_screen(request: Request, psid: str, db: Session = Depends(get_db)):
     session = db.get(PaymentSession, psid)
     if not session:
         raise HTTPException(404, detail="payment session not found")
     order = db.get(Order, session.order_id)
-    return render_template(
+    return templates.TemplateResponse(
         "mockpay.html",
-        psid=psid,
-        order_id=order.id,
-        cls=order.cls,
-        qty=order.qty,
-        amount_eur=f"{session.amount/100.0:.2f}",
-        webhook_url=MOCK_WEBHOOK_URL,
+        {
+            "request": request,
+            "psid": psid,
+            "order_id": order.id,
+            "cls": order.cls,
+            "qty": order.qty,
+            "amount_eur": f"{session.amount/100.0:.2f}",
+            "webhook_url": MOCK_WEBHOOK_URL,
+        }
     )
+
 
 @app.post("/mockpay/{psid}/emit")
 async def mockpay_emit(psid: str, request: Request, db: Session = Depends(get_db)):
@@ -666,27 +543,35 @@ async def mockpay_emit(psid: str, request: Request, db: Session = Depends(get_db
 # ----------------------------
 # Convenience: tiny checkout page for manual tests
 # ----------------------------
+# Checkout page
 @app.get("/demo/checkout", response_class=HTMLResponse)
-async def demo_checkout_page(status: Optional[str] = None, order_id: Optional[str] = None):
-    return render_template("checkout.html", status=status, order_id=order_id)
+async def demo_checkout_page(request: Request, status: Optional[str] = None, order_id: Optional[str] = None):
+    return templates.TemplateResponse(
+        "checkout.html",
+        {"request": request, "status": status, "order_id": order_id}
+    )
 
 # ----------------------------
 # Success page: polls order status and displays tickets
 # ----------------------------
+# Success page
 @app.get("/demo/success", response_class=HTMLResponse)
-async def demo_success_page(order_id: str, db: Session = Depends(get_db)):
+async def demo_success_page(request: Request, order_id: str, db: Session = Depends(get_db)):
     order = db.get(Order, order_id)
     if not order:
         raise HTTPException(404, detail="order not found")
-    return render_template("success.html", order_id=order_id)
+    return templates.TemplateResponse("success.html", {"request": request, "order_id": order_id})
 
 
 # ----------------------------
 # Admin page: list orders and goodies counters
 # ----------------------------
+# Admin page
 @app.get("/admin", response_class=HTMLResponse)
-async def admin_page(db: Session = Depends(get_db)):
-    rows = db.execute(text("SELECT id, status, cls, qty, amount, currency, paid_at, got_goodie FROM orders ORDER BY created_at DESC LIMIT 200")).all()
+async def admin_page(request: Request, db: Session = Depends(get_db)):
+    rows = db.execute(
+        text("SELECT id, status, cls, qty, amount, currency, paid_at, got_goodie FROM orders ORDER BY created_at DESC LIMIT 200")
+    ).all()
     orders = []
     for (oid, status, cls, qty, amount, currency, paid_at, got_goodie) in rows:
         paid_iso = '-' if paid_at is None else datetime.fromtimestamp(paid_at, tz=timezone.utc).isoformat()
@@ -702,11 +587,19 @@ async def admin_page(db: Session = Depends(get_db)):
         })
     a = db.get(GoodiesCounter, 'A')
     b = db.get(GoodiesCounter, 'B')
-    return render_template("admin.html",
-                           orders=orders,
-                           goodies_a=(a.granted if a else 0),
-                           goodies_b=(b.granted if b else 0),
-                           goodie_limit=GOODIE_LIMIT_PER_CLASS)@app.get("/admin", response_class=HTMLResponse)
+    return templates.TemplateResponse(
+        "admin.html",
+        {
+            "request": request,
+            "orders": orders,
+            "goodies_a": (a.granted if a else 0),
+            "goodies_b": (b.granted if b else 0),
+            "goodie_limit": GOODIE_LIMIT_PER_CLASS,
+            "site_name": "TigerFans",
+        }
+    )
+
+
 
 # ----------------------------
 # README notes (SQLite performance quick tips)

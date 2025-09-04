@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% set site_name = "TigerFans" %}
+{% set conf_date = "Dec 3–4, 2025" %}
+{% set conf_tagline = "A conference for people who love fast, correct systems." %}
+{% block title %}{{ site_name }} — {{ conf_tagline }}{% endblock %}
+
+{% block hero %}
+<section class="relative overflow-hidden">
+  <div class="pointer-events-none absolute inset-0 bg-gradient-to-b from-brand-600/20 via-transparent to-transparent"></div>
+  <div class="mx-auto max-w-6xl px-4 py-16 sm:py-24">
+    <div class="grid lg:grid-cols-2 gap-10 items-center">
+      <div>
+        <h1 class="text-4xl sm:text-6xl font-extrabold leading-tight">
+          {{ site_name }} <span class="text-brand-400">2025</span>
+        </h1>
+        <p class="mt-4 text-lg text-slate-300">{{ conf_tagline }}</p>
+        <p class="mt-2 text-slate-400">{{ conf_date }}</p>
+        <div class="mt-8 flex flex-wrap gap-3">
+          <a href="/demo/checkout" class="px-6 py-3 squircle bg-brand-500 hover:bg-brand-400 text-white font-medium transition">Order now</a>
+          <a href="#why" class="px-6 py-3 squircle glass text-white hover:bg-white/10 transition">Why attend?</a>
+        </div>
+      </div>
+      <div class="relative">
+        <div class="absolute -inset-6 rounded-full bg-brand-500/20 blur-3xl"></div>
+        <div class="relative glass squircle p-6">
+          <div class="grid grid-cols-2 gap-4">
+            <div class="p-4 squircle bg-slate-900 border border-white/10">
+              <p class="text-xs text-slate-400">Throughput</p>
+              <p class="text-2xl font-bold">&gt;2M ops/s</p>
+            </div>
+            <div class="p-4 squircle bg-slate-900 border border-white/10">
+              <p class="text-xs text-slate-400">Consistency</p>
+              <p class="text-2xl font-bold">By design</p>
+            </div>
+            <div class="p-4 squircle bg-slate-900 border border-white/10">
+              <p class="text-xs text-slate-400">Latency (p99)</p>
+              <p class="text-2xl font-bold">&lt; 1 ms</p>
+            </div>
+            <div class="p-4 squircle bg-slate-900 border border-white/10">
+              <p class="text-xs text-slate-400">Language</p>
+              <p class="text-2xl font-bold">Zig 🧡</p>
+            </div>
+          </div>
+          <p class="mt-4 text-sm text-slate-400">All transactions in the demo are mock-paid, inventory tracked with TigerBeetle.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+{% endblock %}
+
+{% block content %}
+<section id="why" class="grid md:grid-cols-3 gap-6">
+  <div class="glass squircle p-6">
+    <h3 class="font-semibold text-white">Deep-dive talks</h3>
+    <p class="text-slate-400 mt-2">From consensus to crash consistency—sessions with live benchmarks.</p>
+  </div>
+  <div class="glass squircle p-6">
+    <h3 class="font-semibold text-white">Hands-on labs</h3>
+    <p class="text-slate-400 mt-2">Build a ticketing system with TigerBeetle holds, commits, and idempotency.</p>
+  </div>
+  <div class="glass squircle p-6">
+    <h3 class="font-semibold text-white">Community</h3>
+    <p class="text-slate-400 mt-2">Meet the humans behind your favorite storage engines and protocols.</p>
+  </div>
+</section>
+
+<section class="mt-12">
+  <div class="glass squircle p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+    <div>
+      <p class="text-slate-300">Ready to secure your spot?</p>
+      <p class="text-slate-400 text-sm">Premium and Standard tiers available. First 100 buyers in each class get a bonus.</p>
+    </div>
+    <a href="/demo/checkout" class="px-6 py-3 squircle bg-brand-500 hover:bg-brand-400 text-white font-medium transition">Order now</a>
+  </div>
+</section>
+{% endblock %}
+

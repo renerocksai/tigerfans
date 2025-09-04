@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}Admin — TigerFans{% endblock %}
+
+{% block content %}
+<div class="glass squircle p-6">
+  <h2 class="text-2xl font-semibold">Admin</h2>
+  <div class="mt-4 grid sm:grid-cols-2 gap-4">
+    <div class="glass squircle p-4">
+      <p><strong>Goodies A used:</strong> {{ goodies_a }} / {{ goodie_limit }}</p>
+    </div>
+    <div class="glass squircle p-4">
+      <p><strong>Goodies B used:</strong> {{ goodies_b }} / {{ goodie_limit }}</p>
+    </div>
+  </div>
+
+  <div class="mt-6 overflow-x-auto">
+    <table class="min-w-full text-sm">
+      <thead class="text-left text-slate-300">
+        <tr>
+          <th class="py-2 pr-4">Order</th>
+          <th class="py-2 pr-4">Status</th>
+          <th class="py-2 pr-4">Class</th>
+          <th class="py-2 pr-4">Qty</th>
+          <th class="py-2 pr-4">Amount</th>
+          <th class="py-2 pr-4">Paid at</th>
+          <th class="py-2 pr-4">Goodie</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-white/10">
+        {% for o in orders %}
+          <tr class="
+            {% if o.status == 'PAID' %}bg-emerald-500/5{% endif %}
+            {% if o.status in ['FAILED','CANCELED'] %}bg-rose-500/5{% endif %}
+            {% if o.status == 'PAID_UNFULFILLED' %}bg-amber-500/5{% endif %}
+          ">
+            <td class="py-2 pr-4"><code>{{ o.id[:8] }}</code></td>
+            <td class="py-2 pr-4">{{ o.status }}</td>
+            <td class="py-2 pr-4">{{ o.cls }}</td>
+            <td class="py-2 pr-4">{{ o.qty }}</td>
+            <td class="py-2 pr-4">EUR {{ '%.2f' % (o.amount/100) }}</td>
+            <td class="py-2 pr-4">{{ o.paid_at_iso or '-' }}</td>
+            <td class="py-2 pr-4">{{ 'yes' if o.got_goodie else 'no' }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

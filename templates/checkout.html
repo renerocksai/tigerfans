@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}Tickets — TigerFans{% endblock %}
+
+{% block content %}
+<div class="grid lg:grid-cols-3 gap-8">
+  <div class="lg:col-span-2 glass squircle p-6">
+    <h2 class="text-2xl font-semibold">Choose your ticket</h2>
+    {% if status %}<p class="mt-2 text-sm text-slate-400">Last payment: {{ status|upper }}</p>{% endif %}
+
+    <form id="f" class="mt-6 grid sm:grid-cols-2 gap-4">
+      <label class="block">
+        <span class="text-sm text-slate-300">Class</span>
+        <select name="cls" class="mt-1 w-full squircle bg-slate-900 border border-white/10 p-2">
+          <option value="A">A — Premium (€65)</option>
+          <option value="B">B — Standard (€35)</option>
+        </select>
+      </label>
+      <label class="block">
+        <span class="text-sm text-slate-300">Quantity</span>
+        <input type="number" name="qty" value="1" min="1" class="mt-1 w-full squircle bg-slate-900 border border-white/10 p-2"/>
+      </label>
+      <label class="block sm:col-span-2">
+        <span class="text-sm text-slate-300">Email</span>
+        <input name="customer_email" placeholder="alice@example.com" class="mt-1 w-full squircle bg-slate-900 border border-white/10 p-2"/>
+      </label>
+      <div class="sm:col-span-2 flex gap-3">
+        <button type="submit" class="px-5 py-2 squircle bg-brand-500 hover:bg-brand-400 transition font-medium">Pay now (Mock)</button>
+        <a href="/" class="px-5 py-2 squircle glass hover:bg-white/10 transition">Back</a>
+      </div>
+    </form>
+  </div>
+
+  <aside class="space-y-4">
+    <div class="glass squircle p-4">
+      <h3 class="font-semibold">Perks</h3>
+      <ul class="mt-2 text-sm text-slate-400 list-disc list-inside">
+        <li>Premium (A): reserved Q&A lane, exclusive AMA</li>
+        <li>Standard (B): full talk access</li>
+        <li>🎁 First 100 buyers in each class receive a bonus</li>
+      </ul>
+    </div>
+    <div class="glass squircle p-4">
+      <h3 class="font-semibold">Powered by</h3>
+      <p class="text-slate-400 text-sm mt-2">TigerBeetle holds/commits + MockPay webhooks.</p>
+    </div>
+  </aside>
+</div>
+
+<script>
+  const f = document.getElementById('f');
+  f.onsubmit = async (e) => {
+    e.preventDefault();
+    const data = Object.fromEntries(new FormData(f).entries());
+    data.qty = parseInt(data.qty, 10);
+    const res = await fetch('/api/checkout', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(data)});
+    const j = await res.json();
+    if (j.redirect_url) window.location = j.redirect_url; else alert(JSON.stringify(j));
+  };
+</script>
+{% endblock %}

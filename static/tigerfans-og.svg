@@ -1,0 +1,20 @@
+<svg width="1200" height="630" viewBox="0 0 1200 630" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1200" height="630" fill="#0f172a"/>
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1200" y2="630" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#22d3ee" stop-opacity="0.25"/>
+      <stop offset="1" stop-color="#06b6d4" stop-opacity="0.1"/>
+    </linearGradient>
+  </defs>
+  <rect x="60" y="60" width="1080" height="510" rx="28" fill="url(#g)" stroke="rgba(255,255,255,0.12)"/>
+  <g transform="translate(120,160)">
+    <path d="M40 0 L55 30 L90 34 L67 55 L72 90 L40 73 L8 90 L13 55 L-10 34 L25 30 Z" fill="#22d3ee"/>
+    <text x="120" y="40" font-family="Inter, ui-sans-serif, system-ui" font-weight="800" font-size="64" fill="white">TigerFans 2025</text>
+    <text x="120" y="96" font-family="Inter, ui-sans-serif, system-ui" font-weight="400" font-size="28" fill="#a8b1c0">
+      A conference for people who love fast, correct systems.
+    </text>
+    <text x="120" y="140" font-family="Inter, ui-sans-serif, system-ui" font-weight="600" font-size="24" fill="#67e8f9">
+      Dec 3–4, 2025 • Online
+    </text>
+  </g>
+</svg>

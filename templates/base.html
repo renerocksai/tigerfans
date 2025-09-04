@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <link rel="icon" href="/static/tigerfans-logo.svg" type="image/svg+xml">
+  <title>{% block title %}TigerFans{% endblock %}</title>
+
+  <!-- Open Graph / Twitter -->
+  <meta property="og:title" content="{% block og_title %}TigerFans — A conference for people who love fast, correct systems.{% endblock %}">
+  <meta property="og:description" content="{% block og_desc %}Hands-on labs, deep dives, and a live ticketing demo powered by TigerBeetle.{% endblock %}">
+  <meta property="og:image" content="/static/tigerfans-og.svg">
+  <meta property="og:type" content="website">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:image" content="/static/tigerfans-og.svg">
+
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            brand: { 50:"#ecfeff",100:"#cffafe",200:"#a5f3fc",300:"#67e8f9",400:"#22d3ee",500:"#06b6d4",600:"#0891b2",700:"#0e7490",800:"#155e75",900:"#164e63" }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    .glass { background: rgba(255,255,255,0.08); backdrop-filter: blur(8px); border:1px solid rgba(255,255,255,0.12) }
+    .squircle { border-radius: 20px }
+  </style>
+  {% block head %}{% endblock %}
+</head>
+<body class="min-h-screen bg-slate-950 text-slate-100">
+  <header class="sticky top-0 z-30 bg-slate-950/70 backdrop-blur border-b border-white/10">
+    <div class="mx-auto max-w-6xl px-4 py-3 flex items-center gap-4">
+      <a href="/" class="inline-flex items-center gap-2 font-semibold text-white">
+        <img src="/static/tigerfans-logo.svg" alt="TigerFans" class="h-6 w-auto">
+      </a>
+      <nav class="ml-auto flex items-center gap-4 text-slate-300">
+        <a class="hover:text-white transition" href="/demo/checkout">Tickets</a>
+        <a class="hover:text-white transition" href="/admin">Admin</a>
+        <a class="hover:text-white transition" href="https://tigerbeetle.com" target="_blank" rel="noreferrer">TigerBeetle</a>
+      </nav>
+      <a href="/demo/checkout" class="hidden sm:inline-flex px-4 py-2 squircle bg-brand-500 hover:bg-brand-400 text-white font-medium transition">Order now</a>
+    </div>
+  </header>
+
+  {% block hero %}{% endblock %}
+
+  <main class="mx-auto max-w-6xl px-4 py-10">
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="border-t border-white/10">
+    <div class="mx-auto max-w-6xl px-4 py-8 text-sm text-slate-400">
+      © {{ site_name|default('TigerFans') }}. Built for the love of low-latency systems.
+    </div>
+  </footer>
+</body>
+</html>

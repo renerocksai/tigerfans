@@ -1,0 +1,14 @@
+<svg width="160" height="28" viewBox="0 0 160 28" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="160" y2="28" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#22d3ee"/>
+      <stop offset="1" stop-color="#06b6d4"/>
+    </linearGradient>
+  </defs>
+  <!-- simple tiger stripe mark -->
+  <g>
+    <path d="M14 2 L18 10 L28 11 L21 17 L23 26 L14 21 L5 26 L7 17 L0 11 L10 10 Z" fill="url(#g)"/>
+  </g>
+  <!-- wordmark -->
+  <text x="38" y="20" font-family="Inter, ui-sans-serif, system-ui" font-weight="700" font-size="18" fill="white">TigerFans</text>
+</svg>
