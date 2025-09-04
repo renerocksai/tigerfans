@@ -38,15 +38,13 @@ from typing import Dict, List, Optional, Tuple, TypedDict
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import Form
 
 import re
-from jinja2 import Environment, DictLoader, select_autoescape
-from fastapi.responses import HTMLResponse  # you already have this
 
 
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-templates = Jinja2Templates(directory="templates")
 
 from sqlalchemy import (
     Column,
@@ -61,6 +59,14 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
 
+from starlette.middleware.sessions import SessionMiddleware
+from starlette.status import HTTP_303_SEE_OTHER
+from fastapi.responses import RedirectResponse
+
+templates = Jinja2Templates(directory="templates")
+
+
+
 # ----------------------------
 # Config & Constants
 # ----------------------------
@@ -71,6 +77,11 @@ DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./demo.db")
 TICKET_CLASSES = {"A": {"price": 6500}, "B": {"price": 3500}}  # cents (EUR)
 GOODIE_LIMIT_PER_CLASS = 100
 RESERVATION_TTL_SECONDS = 15 * 60
+
+SESSION_SECRET = os.environ.get("SESSION_SECRET", "dev-secret-change-me")
+ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "supersecret")
+
 
 # ----------------------------
 # Database setup (SQLite)
@@ -156,6 +167,7 @@ with SessionLocal() as db:
             db.add(GoodiesCounter(cls=c, granted=0))
     db.commit()
 
+
 # ----------------------------
 # Helpers
 # ----------------------------
@@ -182,6 +194,23 @@ def get_db() -> Session:
         yield db
     finally:
         db.close()
+
+
+def is_admin(request: Request) -> bool:
+    return bool(request.session.get("admin_user"))
+
+
+def require_admin(request: Request) -> None:
+    if not is_admin(request):
+        # preserve where we wanted to go
+        dest = request.url.path
+        raise HTTPException(status_code=307, detail="redirect to login",
+                            headers={"Location": f"/admin/login?next={dest}"})
+
+
+def ct_equal(a: str, b: str) -> bool:
+    return hmac.compare_digest(a.encode(), b.encode())
+
 
 # ----------------------------
 # Payment Adapter Interface
@@ -276,6 +305,7 @@ def tb_try_grant_goodie(db: Session, ticket_class: str, user_id: str, order_id: 
 # ----------------------------
 app = FastAPI(title="Ticketing Demo with MockPay & TigerBeetle stubs (SQLite)")
 app.mount("/static", StaticFiles(directory="static"), name="static")
+app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET)
 
 # ----------------------------
 # Landing page
@@ -566,9 +596,42 @@ async def demo_success_page(request: Request, order_id: str, db: Session = Depen
 # ----------------------------
 # Admin page: list orders and goodies counters
 # ----------------------------
+
+@app.get("/admin/login", response_class=HTMLResponse)
+async def admin_login_get(request: Request, next: str | None = "/admin"):
+    return templates.TemplateResponse("login.html", {"request": request, "next": next, "error": None})
+
+@app.post("/admin/login", response_class=HTMLResponse)
+async def admin_login_post(
+    request: Request,
+    username: str = Form(...),
+    password: str = Form(...),
+    next: str = Form("/admin"),
+):
+    ok_user = ct_equal(username.strip(), ADMIN_USERNAME)
+    ok_pass = ct_equal(password, ADMIN_PASSWORD)
+    if ok_user and ok_pass:
+        request.session["admin_user"] = username.strip()
+        return RedirectResponse(url=(next or "/admin"), status_code=HTTP_303_SEE_OTHER)
+    # auth failed
+    return templates.TemplateResponse(
+        "login.html",
+        {"request": request, "next": next, "error": "Invalid credentials."},
+        status_code=401,
+    )
+
+@app.get("/admin/logout")
+async def admin_logout(request: Request):
+    request.session.clear()
+    return RedirectResponse(url="/", status_code=HTTP_303_SEE_OTHER)
+
 # Admin page
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_page(request: Request, db: Session = Depends(get_db)):
+    if not is_admin(request):
+        dest = request.url.path
+        return RedirectResponse(url=f"/admin/login?next={dest}", status_code=307)
+
     rows = db.execute(
         text("SELECT id, status, cls, qty, amount, currency, paid_at, got_goodie FROM orders ORDER BY created_at DESC LIMIT 200")
     ).all()
@@ -598,8 +661,6 @@ async def admin_page(request: Request, db: Session = Depends(get_db)):
             "site_name": "TigerFans",
         }
     )
-
-
 
 # ----------------------------
 # README notes (SQLite performance quick tips)
