@@ -523,18 +523,26 @@ async def mockpay_emit(psid: str, request: Request, db: Session = Depends(get_db
             # For the demo, we don't fail the redirect if webhook doesn't reach; user can retry.
             print("Webhook delivery failed:", e)
 
-    return RedirectResponse(url=f"/mockpay/{psid}?sent={kind}", status_code=303)
+    # Redirect UX
+    if kind == "succeeded":
+        return RedirectResponse(url=f"/demo/success?order_id={session.order_id}", status_code=303)
+    elif kind == "failed":
+        return RedirectResponse(url=f"/demo/checkout?status=failed&order_id={session.order_id}", status_code=303)
+    else:
+        return RedirectResponse(url=f"/demo/checkout?status=canceled&order_id={session.order_id}", status_code=303)
 
 # ----------------------------
 # Convenience: tiny checkout page for manual tests
 # ----------------------------
 @app.get("/demo/checkout", response_class=HTMLResponse)
-async def demo_checkout_page():
-    return """
+async def demo_checkout_page(status: Optional[str] = None, order_id: Optional[str] = None):
+    status_note = "" if not status else f"<p><strong>Last payment:</strong> {status.upper()}</p>"
+    return f"""
     <html>
       <head><meta charset='utf-8'><title>Demo Checkout</title></head>
       <body style="font-family:system-ui;margin:2rem">
         <h3>Demo Checkout</h3>
+        {status_note}
         <form id="f">
           <label>Class: <select name="cls"><option>A</option><option>B</option></select></label>
           <label>Quantity: <input type="number" name="qty" value="1" min="1"/></label>
@@ -543,18 +551,109 @@ async def demo_checkout_page():
         </form>
         <script>
           const f = document.getElementById('f');
-          f.onsubmit = async (e) => {
+          f.onsubmit = async (e) => {{
             e.preventDefault();
             const data = Object.fromEntries(new FormData(f).entries());
             data.qty = parseInt(data.qty, 10);
-            const res = await fetch('/api/checkout', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(data)});
+            const res = await fetch('/api/checkout', {{method:'POST', headers:{{'content-type':'application/json'}}, body: JSON.stringify(data)}});
             const j = await res.json();
             if (j.redirect_url) window.location = j.redirect_url; else alert(JSON.stringify(j));
-          };
+          }};
         </script>
       </body>
     </html>
     """
+
+# ----------------------------
+# Success page: polls order status and displays tickets
+# ----------------------------
+@app.get("/demo/success", response_class=HTMLResponse)
+async def demo_success_page(order_id: str, db: Session = Depends(get_db)):
+    order = db.get(Order, order_id)
+    if not order:
+        raise HTTPException(404, detail="order not found")
+    # IMPORTANT: when embedding JS template strings in a Python f-string,
+    # escape every { and } intended for JS with {{ and }}.
+    return f"""
+    <html>
+      <head>
+        <meta charset='utf-8'>
+        <title>Payment Success</title>
+      </head>
+      <body style="font-family:system-ui;margin:2rem">
+        <h3>Thanks! Checking your payment…</h3>
+        <div id="status">Order: {order_id}</div>
+        <div id="tickets"></div>
+        <p><a href="/admin" target="_blank">Open Admin</a> · <a href="/demo/checkout">Back to Checkout</a></p>
+        <script>
+          const orderId = "{order_id}";
+          async function tick() {{
+            const res = await fetch(`/api/orders/${{orderId}}`);
+            const j = await res.json();
+            document.getElementById('status').innerText = `Status: ${{j.status}}`;
+            if (j.status === 'PAID') {{
+              const t = j.tickets || [];
+              document.getElementById('tickets').innerHTML =
+                `<h4>Tickets</h4><ul>` + t.map(x => `<li>${{x}}</li>`).join('') + `</ul>` +
+                (j.got_goodie ? '<p>🎁 Goodie granted!</p>' : '');
+              clearInterval(timer);
+            }} else if (j.status === 'FAILED' || j.status === 'CANCELED') {{
+              document.getElementById('tickets').innerHTML = '<p>Payment did not complete.</p>';
+              clearInterval(timer);
+            }}
+          }}
+          const timer = setInterval(tick, 1000);
+          tick();
+        </script>
+      </body>
+    </html>
+    """
+
+
+# ----------------------------
+# Admin page: list orders and goodies counters
+# ----------------------------
+@app.get("/admin", response_class=HTMLResponse)
+async def admin_page(db: Session = Depends(get_db)):
+    orders = db.execute(text("SELECT id, status, cls, qty, amount, currency, paid_at, got_goodie FROM orders ORDER BY created_at DESC LIMIT 200")).all()
+    a = db.get(GoodiesCounter, 'A')
+    b = db.get(GoodiesCounter, 'B')
+    def row(o):
+        (id, status, cls, qty, amount, currency, paid_at, got_goodie) = o
+        paid = '-' if paid_at is None else datetime.fromtimestamp(paid_at, tz=timezone.utc).isoformat()
+        eur = f"EUR {amount/100:.2f}"
+        gg = 'yes' if got_goodie else 'no'
+        return f"<tr><td><code>{id[:8]}</code></td><td>{status}</td><td>{cls}</td><td>{qty}</td><td>{eur}</td><td>{paid}</td><td>{gg}</td></tr>"
+    rows = "".join(row(o) for o in orders)
+    return f"""
+    <html>
+      <head>
+        <meta charset='utf-8'/>
+        <title>Admin</title>
+        <meta http-equiv="refresh" content="3">
+        <style>
+          body {{ font-family: system-ui; margin: 2rem; }}
+          table {{ border-collapse: collapse; width: 100%; }}
+          th, td {{ border: 1px solid #ddd; padding: .5rem; text-align: left; }}
+          th {{ background:#f7f7f7; }}
+          .cards {{ display:flex; gap:1rem; margin-bottom:1rem; }}
+          .card {{ border:1px solid #ddd; border-radius:12px; padding:1rem; }}
+        </style>
+      </head>
+      <body>
+        <h2>Admin</h2>
+        <div class="cards">
+          <div class="card"><strong>Goodies A used:</strong> {a.granted if a else 0} / {GOODIE_LIMIT_PER_CLASS}</div>
+          <div class="card"><strong>Goodies B used:</strong> {b.granted if b else 0} / {GOODIE_LIMIT_PER_CLASS}</div>
+        </div>
+        <table>
+          <thead><tr><th>Order</th><th>Status</th><th>Class</th><th>Qty</th><th>Amount</th><th>Paid at</th><th>Goodie</th></tr></thead>
+          <tbody>{rows}</tbody>
+        </table>
+      </body>
+    </html>
+    """
+
 
 # ----------------------------
 # README notes (SQLite performance quick tips)
@@ -563,3 +662,4 @@ async def demo_checkout_page():
 # - Avoid running multiple gunicorn/uvicorn workers writing to the same SQLite file. Prefer a single process with async I/O.
 # - If you need higher write concurrency, move to Postgres. Keep the adapter boundary so the migration is easy.
 # - Webhooks: keep fulfillment idempotent; DB has FulfillmentKey + WebhookEventSeen as guards.
+
