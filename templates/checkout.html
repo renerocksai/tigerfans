@@ -2,59 +2,69 @@
 {% block title %}Tickets — TigerFans{% endblock %}
 
 {% block content %}
-<div class="grid lg:grid-cols-3 gap-8">
-  <div class="lg:col-span-2 glass squircle p-6">
-    <h2 class="text-2xl font-semibold">Choose your ticket</h2>
-    {% if status %}<p class="mt-2 text-sm text-slate-400">Last payment: {{ status|upper }}</p>{% endif %}
+<div class="max-w-2xl glass squircle p-6">
+  <h2 class="text-2xl font-semibold">Choose your ticket</h2>
+  {% if status %}<p class="mt-2 text-sm text-slate-400">Last payment: {{ status|upper }}</p>{% endif %}
 
-    <form id="f" class="mt-6 grid sm:grid-cols-2 gap-4">
-      <label class="block">
-        <span class="text-sm text-slate-300">Class</span>
-        <select name="cls" class="mt-1 w-full squircle bg-slate-900 border border-white/10 p-2">
-          <option value="A">A — Premium (€65)</option>
-          <option value="B">B — Standard (€35)</option>
-        </select>
-      </label>
-      <label class="block">
-        <span class="text-sm text-slate-300">Quantity</span>
-        <input type="number" name="qty" value="1" min="1" class="mt-1 w-full squircle bg-slate-900 border border-white/10 p-2"/>
-      </label>
-      <label class="block sm:col-span-2">
-        <span class="text-sm text-slate-300">Email</span>
-        <input name="customer_email" placeholder="alice@example.com" class="mt-1 w-full squircle bg-slate-900 border border-white/10 p-2"/>
-      </label>
-      <div class="sm:col-span-2 flex gap-3">
-        <button type="submit" class="px-5 py-2 squircle bg-brand-500 hover:bg-brand-400 transition font-medium">Pay now (Mock)</button>
-        <a href="/" class="px-5 py-2 squircle glass hover:bg-white/10 transition">Back</a>
-      </div>
-    </form>
-  </div>
+  <form id="f" class="mt-6 grid gap-4" novalidate>
+    <label class="block">
+      <span class="text-sm text-slate-300">Class</span>
+      <select name="cls" class="mt-1 w-full squircle bg-slate-900 border border-white/10 p-2">
+        <option value="A">A — Premium (€65)</option>
+        <option value="B">B — Standard (€35)</option>
+      </select>
+    </label>
 
-  <aside class="space-y-4">
-    <div class="glass squircle p-4">
-      <h3 class="font-semibold">Perks</h3>
-      <ul class="mt-2 text-sm text-slate-400 list-disc list-inside">
-        <li>Premium (A): reserved Q&A lane, exclusive AMA</li>
-        <li>Standard (B): full talk access</li>
-        <li>🎁 First 100 buyers in each class receive a bonus</li>
-      </ul>
+    <label class="block">
+      <span class="text-sm text-slate-300">Email</span>
+      <input name="customer_email" required placeholder="alice@example.com"
+             class="mt-1 w-full squircle bg-slate-900 border border-white/10 p-2"/>
+    </label>
+
+    <p id="err" class="hidden text-sm text-rose-300"></p>
+
+    <div class="flex gap-3">
+      <button type="submit" class="px-5 py-2 squircle bg-brand-500 hover:bg-brand-400 transition font-medium">
+        Pay now (Mock)
+      </button>
+      <a href="/" class="px-5 py-2 squircle glass hover:bg-white/10 transition">Back</a>
     </div>
-    <div class="glass squircle p-4">
-      <h3 class="font-semibold">Powered by</h3>
-      <p class="text-slate-400 text-sm mt-2">TigerBeetle holds/commits + MockPay webhooks.</p>
-    </div>
-  </aside>
+  </form>
 </div>
 
 <script>
   const f = document.getElementById('f');
+  const err = document.getElementById('err');
+  const emailRx = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
   f.onsubmit = async (e) => {
     e.preventDefault();
+    err.classList.add('hidden'); err.textContent = '';
+
     const data = Object.fromEntries(new FormData(f).entries());
-    data.qty = parseInt(data.qty, 10);
-    const res = await fetch('/api/checkout', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify(data)});
+    if (!data.customer_email || !emailRx.test(data.customer_email.trim())) {
+      err.textContent = 'Please enter a valid email address.';
+      err.classList.remove('hidden');
+      return;
+    }
+
+    // Single-ticket policy: no quantity sent; backend enforces qty=1
+    const res = await fetch('/api/checkout', {
+      method:'POST',
+      headers:{'content-type':'application/json'},
+      body: JSON.stringify({ cls: data.cls, customer_email: data.customer_email.trim() })
+    });
+
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}));
+      err.textContent = j.detail || `Error ${res.status}`;
+      err.classList.remove('hidden');
+      return;
+    }
+
     const j = await res.json();
-    if (j.redirect_url) window.location = j.redirect_url; else alert(JSON.stringify(j));
+    if (j.redirect_url) window.location = j.redirect_url;
   };
 </script>
 {% endblock %}
+

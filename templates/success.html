@@ -1,12 +1,34 @@
 {% extends "base.html" %}
 {% block title %}Payment — TigerFans{% endblock %}
 
+{% block head %}
+  <!-- Lightweight QR generator (no build step) -->
+  <script src="/static/qrcode.min.js" defer></script>
+{% endblock %}
+
 {% block content %}
 <div class="glass squircle p-6">
-  <h2 class="text-2xl font-semibold">Thanks! We’re confirming your payment…</h2>
-  <p id="status" class="mt-2 text-slate-300">Order: {{ order_id }}</p>
-  <div id="tickets" class="mt-6"></div>
-  <div class="mt-6 flex gap-3">
+  <div class="flex items-center justify-between gap-4">
+    <h2 class="text-2xl font-semibold">Thanks! We’re confirming your payment…</h2>
+    <span id="paidBadge" class="hidden text-sm px-3 py-1 squircle border border-emerald-500/30 bg-emerald-500/10 text-emerald-300">
+      PAID
+    </span>
+  </div>
+
+  <p id="status" class="mt-2 text-slate-300">
+    Order: <span class="font-mono">{{ order_id }}</span> · <span id="statusText">PENDING</span>
+  </p>
+
+  <div id="tickets" class="mt-8 space-y-6"></div>
+
+  <div id="instructions" class="hidden mt-8 p-4 squircle bg-slate-900 border border-white/10 text-sm text-slate-300">
+    <p class="font-medium">Save your QR code.</p>
+    <p class="mt-1">You’ll need it at registration to get your badge. Each ticket has a unique code.</p>
+  </div>
+
+  <div id="errBox" class="hidden mt-6 p-4 squircle bg-rose-500/5 border border-rose-500/30 text-rose-200"></div>
+
+  <div class="mt-8 flex gap-3">
     <a href="/demo/checkout" class="px-4 py-2 squircle glass hover:bg-white/10 transition">Back to tickets</a>
     <a href="/admin" class="px-4 py-2 squircle bg-brand-500 hover:bg-brand-400 transition">Open admin</a>
   </div>
@@ -14,26 +36,122 @@
 
 <script>
   const orderId = {{ order_id|tojson }};
+  const statusText = document.getElementById('statusText');
+  const paidBadge = document.getElementById('paidBadge');
+  const ticketsEl = document.getElementById('tickets');
+  const errBox = document.getElementById('errBox');
+  const instructions = document.getElementById('instructions');
+
+  function setPaidUI() {
+    statusText.textContent = 'PAID';
+    statusText.className = 'font-semibold text-emerald-300';
+    paidBadge.classList.remove('hidden');
+    instructions.classList.remove('hidden');
+  }
+
+  function setFailedUI(msg) {
+    statusText.textContent = 'FAILED';
+    statusText.className = 'font-semibold text-rose-300';
+    errBox.textContent = msg || 'Payment did not complete (reservation expired or canceled).';
+    errBox.classList.remove('hidden');
+  }
+
+  function setUnfulfilledUI() {
+    statusText.textContent = 'PAID_UNFULFILLED';
+    statusText.className = 'font-semibold text-amber-300';
+    errBox.textContent = 'Payment received but tickets are no longer available. We will reconcile or refund.';
+    errBox.classList.remove('hidden');
+  }
+
+  function renderTickets(tickets, gotGoodie) {
+    ticketsEl.innerHTML = '';
+    if (gotGoodie) {
+      const perk = document.createElement('p');
+      perk.className = 'text-emerald-300';
+      perk.textContent = '🎁 Bonus granted!';
+      ticketsEl.appendChild(perk);
+    }
+    tickets.forEach((code, idx) => {
+      const card = document.createElement('div');
+      card.className = 'p-4 squircle bg-slate-900 border border-white/10';
+
+      const header = document.createElement('div');
+      header.className = 'flex items-center justify-between gap-2';
+      header.innerHTML = `
+        <div>
+          <!-- <div class="text-sm text-slate-400">Ticket ${idx + 1}</div> -->
+          <div class="text-sm text-slate-400">Your Ticket</div>
+          <div class="font-mono text-lg text-white">${code}</div>
+        </div>
+        <div class="text-xs text-slate-400">Show this QR at registration</div>
+      `;
+      card.appendChild(header);
+
+      const qrWrap = document.createElement('div');
+      qrWrap.className = 'mt-3 flex items-center gap-4 flex-wrap';
+      const qrBox = document.createElement('div');
+      qrBox.id = 'qr_' + idx;
+      qrBox.className = 'p-2 squircle bg-white';
+      qrWrap.appendChild(qrBox);
+
+      const actions = document.createElement('div');
+      actions.className = 'flex flex-col gap-2';
+      const saveBtn = document.createElement('button');
+      saveBtn.className = 'px-3 py-1 squircle bg-brand-500 hover:bg-brand-400 text-white text-sm transition';
+      saveBtn.textContent = 'Download PNG';
+      actions.appendChild(saveBtn);
+      qrWrap.appendChild(actions);
+
+      card.appendChild(qrWrap);
+      ticketsEl.appendChild(card);
+
+      // Generate QR (content = ticket code)
+      const qr = new QRCode(qrBox, {
+        text: code,
+        width: 160,
+        height: 160,
+        correctLevel: QRCode.CorrectLevel.M
+      });
+
+      // Download as PNG
+      saveBtn.onclick = () => {
+        // qrcodejs renders a <canvas> (or img). Prefer canvas.
+        const canvas = qrBox.querySelector('canvas');
+        const dataUrl = canvas ? canvas.toDataURL('image/png') : qrBox.querySelector('img')?.src;
+        if (!dataUrl) return;
+        const a = document.createElement('a');
+        a.href = dataUrl;
+        a.download = `${code}.png`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      };
+    });
+  }
+
   async function tick() {
-    const res = await fetch(`/api/orders/${orderId}`);
-    const j = await res.json();
-    document.getElementById('status').innerText = `Status: ${j.status}`;
-    if (j.status === 'PAID') {
-      const t = j.tickets || [];
-      document.getElementById('tickets').innerHTML =
-        `<h3 class="text-xl font-semibold mb-2">Your tickets</h3>` +
-        `<ul class="space-y-2">` +
-        t.map(x=>`<li class="p-2 squircle bg-slate-900 border border-white/10">${x}</li>`).join('') +
-        `</ul>` + (j.got_goodie ? '<p class="mt-4">🎁 Bonus granted!</p>':'');
-      clearInterval(timer);
-    } else if (j.status === 'PAID_UNFULFILLED') {
-      document.getElementById('tickets').innerHTML =
-        '<p class="text-amber-300">Payment received but tickets are no longer available. We will reconcile or refund.</p>';
-      clearInterval(timer);
-    } else if (j.status === 'FAILED' || j.status === 'CANCELED') {
-      document.getElementById('tickets').innerHTML =
-        '<p class="text-rose-300">Payment did not complete (reservation expired or canceled).</p>';
-      clearInterval(timer);
+    try {
+      const res = await fetch(`/api/orders/${orderId}`, { cache: 'no-store' });
+      const j = await res.json();
+      // Update status line (light until paid)
+      if (j.status === 'PAID') {
+        setPaidUI();
+        renderTickets(j.tickets || [], j.got_goodie);
+        clearInterval(timer);
+      } else if (j.status === 'PAID_UNFULFILLED') {
+        setUnfulfilledUI();
+        clearInterval(timer);
+      } else if (j.status === 'FAILED' || j.status === 'CANCELED') {
+        setFailedUI();
+        clearInterval(timer);
+      } else {
+        statusText.textContent = j.status;
+        statusText.className = 'text-slate-300';
+      }
+    } catch (e) {
+      // network or JSON error: show once, keep polling
+      errBox.textContent = 'Temporary error loading status. Retrying…';
+      errBox.classList.remove('hidden');
     }
   }
   const timer = setInterval(tick, 1000);

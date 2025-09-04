@@ -39,6 +39,7 @@ import httpx
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
+import re
 from jinja2 import Environment, DictLoader, select_autoescape
 from fastapi.responses import HTMLResponse  # you already have this
 
@@ -167,6 +168,13 @@ def to_iso(ts: float | None) -> Optional[str]:
         return None
     return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
 
+def is_valid_email(email: Optional[str]) -> bool:
+    if not email:
+        return False
+    email = email.strip()
+    # simple but effective email check
+    return re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email) is not None
+
 
 def get_db() -> Session:
     db = SessionLocal()
@@ -290,45 +298,47 @@ async def landing_page(request: Request):
 # ----------------------------
 @app.post("/api/reservations")
 async def create_reservation(payload: dict, db: Session = Depends(get_db)):
-    cls = payload.get("cls")  # "A" or "B"
-    qty = int(payload.get("qty", 1))
+    cls = payload.get("cls")
+    qty = 1  # single-ticket policy
     if cls not in TICKET_CLASSES:
         raise HTTPException(400, detail="invalid class")
-    if qty <= 0:
-        raise HTTPException(400, detail="qty must be > 0")
 
     rid = uuid.uuid4().hex
     expires_at = now_ts() + RESERVATION_TTL_SECONDS
-
-    # TigerBeetle hold
     tb_hold_tickets(cls, qty, rid)
 
     res = Reservation(
-        id=rid,
-        cls=cls,
-        qty=qty,
+        id=rid, cls=cls, qty=qty,
         created_at=now_ts(),
         expires_at=expires_at,
         status="ACTIVE",
     )
     db.add(res)
     db.commit()
-    return {
-        "reservation_id": rid,
-        "cls": cls,
-        "qty": qty,
-        "expires_at": to_iso(expires_at),
-    }
+    return {"reservation_id": rid, "cls": cls, "qty": qty, "expires_at": to_iso(expires_at)}
+
 
 # ----------------------------
-# API: Create Checkout Session
+# Checkout page (force 1 ticket, require email)
 # ----------------------------
+@app.get("/demo/checkout", response_class=HTMLResponse)
+async def demo_checkout_page(request: Request, status: Optional[str] = None, order_id: Optional[str] = None):
+    return templates.TemplateResponse(
+        "checkout.html",
+        {"request": request, "status": status, "order_id": order_id}
+    )
+
+
 @app.post("/api/checkout")
 async def create_checkout(payload: dict, db: Session = Depends(get_db)):
     reservation_id = payload.get("reservation_id")
     cls = payload.get("cls")
-    qty = int(payload.get("qty", 1))
-    customer_email = payload.get("customer_email")
+    # Enforce single-ticket policy
+    qty = 1
+    customer_email = (payload.get("customer_email") or "").strip()
+
+    if not is_valid_email(customer_email):
+        raise HTTPException(400, detail="customer_email is required and must be a valid email address")
 
     if reservation_id:
         res = db.get(Reservation, reservation_id)
@@ -340,13 +350,12 @@ async def create_checkout(payload: dict, db: Session = Depends(get_db)):
             tb_rollback_reservation(reservation_id)
             raise HTTPException(409, detail="reservation expired")
         cls = res.cls
-        qty = res.qty
+        # Even if an older reservation had qty>1, enforce single-ticket policy
+        qty = 1
     else:
         if cls not in TICKET_CLASSES:
             raise HTTPException(400, detail="invalid class")
-        if qty <= 0:
-            raise HTTPException(400, detail="qty must be > 0")
-        # Implicit hold when no reservation provided
+        # Implicit hold for exactly 1 ticket when no reservation provided
         reservation_id = uuid.uuid4().hex
         tb_hold_tickets(cls, qty, reservation_id)
         res = Reservation(
@@ -386,6 +395,7 @@ async def create_checkout(payload: dict, db: Session = Depends(get_db)):
         "amount": amount,
         "currency": order.currency,
     }
+
 
 # ----------------------------
 # API: Order status (polled by success page)
@@ -540,16 +550,6 @@ async def mockpay_emit(psid: str, request: Request, db: Session = Depends(get_db
     else:
         return RedirectResponse(url=f"/demo/checkout?status=canceled&order_id={session.order_id}", status_code=303)
 
-# ----------------------------
-# Convenience: tiny checkout page for manual tests
-# ----------------------------
-# Checkout page
-@app.get("/demo/checkout", response_class=HTMLResponse)
-async def demo_checkout_page(request: Request, status: Optional[str] = None, order_id: Optional[str] = None):
-    return templates.TemplateResponse(
-        "checkout.html",
-        {"request": request, "status": status, "order_id": order_id}
-    )
 
 # ----------------------------
 # Success page: polls order status and displays tickets
