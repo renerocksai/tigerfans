@@ -2,7 +2,7 @@
 {% block title %}Tickets — TigerFans{% endblock %}
 
 {% block content %}
-<div class="max-w-2xl glass squircle p-6">
+<div class="max-w-2xl mx-auto glass squircle p-6">
   <h2 class="text-2xl font-semibold">Choose your ticket</h2>
 
   {% if status %}
@@ -57,10 +57,13 @@
   const f = document.getElementById('f');
   const err = document.getElementById('err');
   const emailRx = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  const btn = f.querySelector('button[type="submit"]');
+  const originalBtnText = btn.textContent;
 
   f.onsubmit = async (e) => {
     e.preventDefault();
-    err.classList.add('hidden'); err.textContent = '';
+    err.classList.add('hidden');
+    err.textContent = '';
 
     const data = Object.fromEntries(new FormData(f).entries());
     if (!data.customer_email || !emailRx.test(data.customer_email.trim())) {
@@ -69,21 +72,43 @@
       return;
     }
 
-    const res = await fetch('/api/checkout', {
-      method:'POST',
-      headers:{'content-type':'application/json'},
-      body: JSON.stringify({ cls: data.cls, customer_email: data.customer_email.trim() })
-    });
+    // show processing
+    btn.disabled = true;
+    btn.classList.add('opacity-70', 'cursor-not-allowed');
+    btn.textContent = 'Processing…';
 
-    if (!res.ok) {
-      const j = await res.json().catch(() => ({}));
-      err.textContent = j.detail || `Error ${res.status}`;
-      err.classList.remove('hidden');
-      return;
+    const start = Date.now();
+    try {
+      const res = await fetch('/api/checkout', {
+        method:'POST',
+        headers:{'content-type':'application/json'},
+        body: JSON.stringify({ cls: data.cls, customer_email: data.customer_email.trim() })
+      });
+
+      const elapsed = Date.now() - start;
+      const minDelay = 800; // 0.8s minimum to make animation visible
+      if (elapsed < minDelay) {
+        await new Promise(r => setTimeout(r, minDelay - elapsed));
+      }
+
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        err.textContent = j.detail || `Error ${res.status}`;
+        err.classList.remove('hidden');
+        return;
+      }
+
+      const j = await res.json();
+      if (j.redirect_url) window.location = j.redirect_url;
+    } finally {
+      // reset only if we’re still on the page
+      if (document.body.contains(btn)) {
+        btn.disabled = false;
+        btn.classList.remove('opacity-70', 'cursor-not-allowed');
+        btn.textContent = originalBtnText;
+      }
     }
-
-    const j = await res.json();
-    if (j.redirect_url) window.location = j.redirect_url;
   };
+
 </script>
 {% endblock %}

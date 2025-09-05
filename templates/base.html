@@ -29,6 +29,23 @@
   <style>
     .glass { background: rgba(255,255,255,0.08); backdrop-filter: blur(8px); border:1px solid rgba(255,255,255,0.12) }
     .squircle { border-radius: 20px }
+
+    /* ------- simple entrance animations ------- */
+    @keyframes fade-up {
+      from { opacity: 0; transform: translateY(16px) scale(0.98); }
+      to   { opacity: 1; transform: translateY(0)     scale(1); }
+    }
+    @keyframes fade {
+      from { opacity: 0 } to { opacity: 1 }
+    }
+    .animate-fade-up { animation: fade-up .48s cubic-bezier(.22,.61,.36,1) both; }
+    .animate-fade    { animation: fade .36s ease-out both; }
+
+    /* optional delays for easy stagger */
+    .delay-100 { animation-delay: .1s }
+    .delay-200 { animation-delay: .2s }
+    .delay-300 { animation-delay: .3s }
+    .delay-400 { animation-delay: .4s }
   </style>
   {% block head %}{% endblock %}
 </head>
