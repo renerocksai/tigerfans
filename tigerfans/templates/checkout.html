@@ -26,10 +26,16 @@
     {% endif %}
   {% endif %}
 
+  <!-- Live inventory -->
+  <div id="inv" class="mt-4 grid sm:grid-cols-2 gap-3 text-sm"></div>
+  <p id="holdsHint" class="hidden mt-2 text-amber-300 text-sm">
+    A number of tickets are currently locked in pending checkouts. Some of these may time out or fail—try again a bit later.
+  </p>
+
   <form id="f" class="mt-6 grid gap-4" novalidate>
     <label class="block">
       <span class="text-sm text-slate-300">Class</span>
-      <select name="cls" class="mt-1 w-full squircle bg-slate-900 border border-white/10 p-2">
+      <select id="cls" name="cls" class="mt-1 w-full squircle bg-slate-900 border border-white/10 p-2">
         <option value="A">A — Premium (€65)</option>
         <option value="B">B — Standard (€35)</option>
       </select>
@@ -56,28 +62,100 @@
 <script>
   const f = document.getElementById('f');
   const err = document.getElementById('err');
+  const clsSelect = document.getElementById('cls');
+  const invEl = document.getElementById('inv');
+  const holdsHint = document.getElementById('holdsHint');
   const emailRx = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+  async function loadInventory() {
+    try {
+      const res = await fetch('/api/inventory', {cache: 'no-store'});
+      const inv = await res.json();
+
+      // Build the little cards
+      invEl.innerHTML = '';
+      let manyHolds = false;
+      for (const [k, v] of Object.entries(inv)) {
+        const soldOut = v.sold_out;
+        const available = v.available;
+        const holds = v.active_holds;
+        const cap = v.capacity;
+        // Heuristic: “many holds” if >20% of capacity or >10 tickets locked
+        if (holds >= Math.max(10, Math.ceil(cap * 0.2))) manyHolds = true;
+
+        const card = document.createElement('div');
+        card.className = 'p-3 squircle bg-slate-900 border border-white/10 flex items-center justify-between gap-3';
+        card.innerHTML = `
+          <div>
+            <div class="text-slate-300 font-semibold">Class ${k}</div>
+            <!-- <div class="text-slate-400">Sold: ${v.sold} • Holds: ${holds} • Left: ${available}</div> -->
+            <div class="text-slate-400">Holds: ${holds} • Left: ${available}</div>
+          </div>
+          <span class="text-xs px-2 py-1 squircle ${
+            soldOut ? 'bg-rose-500/10 text-rose-300 border border-rose-500/30'
+                    : 'bg-emerald-500/10 text-emerald-300 border border-emerald-500/30'
+          }">${soldOut ? 'SOLD OUT' : 'AVAILABLE'}</span>
+        `;
+        invEl.appendChild(card);
+      }
+
+      // Toggle hint if many holds across classes
+      holdsHint.classList.toggle('hidden', !manyHolds);
+
+      // Disable sold-out classes in select
+      for (const opt of clsSelect.options) {
+        const v = inv[opt.value];
+        if (!v) continue;
+        opt.disabled = v.sold_out;
+        opt.textContent = v.sold_out
+          ? `${opt.value} — ${opt.textContent.replace(/—.*/, '— Sold out')}`
+          : (opt.value === 'A' ? 'A — Premium (€65)' : 'B — Standard (€35)');
+      }
+
+      // If the currently chosen option is sold out, switch to any available if possible
+      if (inv[clsSelect.value]?.sold_out) {
+        const alt = Array.from(clsSelect.options).find(o => !o.disabled);
+        if (alt) clsSelect.value = alt.value;
+      }
+
+    } catch (e) {
+      // fail silent in UI; keep previous state
+    }
+  }
+
+  // Initial load + periodic refresh (10s)
+  loadInventory();
+  setInterval(loadInventory, 10000);
+
+  // Submit with minimum “Processing…” time so animation is noticeable
   const btn = f.querySelector('button[type="submit"]');
   const originalBtnText = btn.textContent;
 
   f.onsubmit = async (e) => {
     e.preventDefault();
-    err.classList.add('hidden');
-    err.textContent = '';
+    err.classList.add('hidden'); err.textContent = '';
 
     const data = Object.fromEntries(new FormData(f).entries());
+    // client guard: prevent submit if class currently sold out
+    const inv = await fetch('/api/inventory', {cache:'no-store'}).then(r=>r.json()).catch(()=>null);
+    if (inv && inv[data.cls] && inv[data.cls].sold_out) {
+      err.textContent = 'This ticket class is currently sold out. Some pending checkouts may time out—try again later.';
+      err.classList.remove('hidden');
+      return;
+    }
+
     if (!data.customer_email || !emailRx.test(data.customer_email.trim())) {
       err.textContent = 'Please enter a valid email address.';
       err.classList.remove('hidden');
       return;
     }
 
-    // show processing
+    // micro-animation: enforce minimum visible duration
     btn.disabled = true;
     btn.classList.add('opacity-70', 'cursor-not-allowed');
     btn.textContent = 'Processing…';
-
     const start = Date.now();
+
     try {
       const res = await fetch('/api/checkout', {
         method:'POST',
@@ -86,10 +164,8 @@
       });
 
       const elapsed = Date.now() - start;
-      const minDelay = 800; // 0.8s minimum to make animation visible
-      if (elapsed < minDelay) {
-        await new Promise(r => setTimeout(r, minDelay - elapsed));
-      }
+      const minDelay = 700;
+      if (elapsed < minDelay) await new Promise(r => setTimeout(r, minDelay - elapsed));
 
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
@@ -101,7 +177,6 @@
       const j = await res.json();
       if (j.redirect_url) window.location = j.redirect_url;
     } finally {
-      // reset only if we’re still on the page
       if (document.body.contains(btn)) {
         btn.disabled = false;
         btn.classList.remove('opacity-70', 'cursor-not-allowed');
@@ -109,6 +184,5 @@
       }
     }
   };
-
 </script>
 {% endblock %}

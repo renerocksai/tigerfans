@@ -76,6 +76,7 @@ MOCK_WEBHOOK_URL = os.environ.get(
 MOCK_SECRET = os.environ.get("MOCK_SECRET", "supersecret")
 DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./demo.db")
 
+INVENTORY_CAPACITY = {"A": 200, "B": 500}  # demo numbers; adjust to your event
 TICKET_CLASSES = {"A": {"price": 6500}, "B": {"price": 3500}}  # cents (EUR)
 GOODIE_LIMIT_PER_CLASS = 100
 RESERVATION_TTL_SECONDS = 15 * 60
@@ -231,12 +232,55 @@ def ct_equal(a: str, b: str) -> bool:
     return hmac.compare_digest(a.encode(), b.encode())
 
 
+def compute_inventory(db: Session):
+    now = now_ts()
+    # sold = paid orders
+    sold_by_cls = {c: 0 for c in TICKET_CLASSES}
+    rows = db.execute(text("""
+        SELECT cls, COUNT(*)
+        FROM orders
+        WHERE status = 'PAID'
+        GROUP BY cls
+    """)).all()
+    for cls, cnt in rows:
+        sold_by_cls[cls] = int(cnt)
+
+    # active holds = reservations not expired
+    holds_by_cls = {c: 0 for c in TICKET_CLASSES}
+    rows = db.execute(text("""
+        SELECT cls, COUNT(*)
+        FROM reservations
+        WHERE status = 'ACTIVE' AND expires_at > :now
+        GROUP BY cls
+    """), {"now": now}).all()
+    for cls, cnt in rows:
+        holds_by_cls[cls] = int(cnt)
+
+    # compute availability
+    out = {}
+    for cls in TICKET_CLASSES.keys():
+        capacity = INVENTORY_CAPACITY.get(cls, 0)
+        sold = sold_by_cls.get(cls, 0)
+        holds = holds_by_cls.get(cls, 0)
+        available = max(0, capacity - sold - holds)
+        out[cls] = {
+            "capacity": capacity,
+            "sold": sold,
+            "active_holds": holds,
+            "available": available,
+            "sold_out": available <= 0,
+            "timestamp": to_iso(now),
+        }
+    return out
+
+
 # ----------------------------
 # Payment Adapter Interface
 # ----------------------------
 class CreateSessionResult(TypedDict):
     payment_session_id: str
     redirect_url: str
+
 
 class PaymentAdapter(ABC):
     @abstractmethod
@@ -286,6 +330,7 @@ class MockPay(PaymentAdapter):
 
     def event_ids(self, event: dict) -> Tuple[str, Optional[str]]:
         return event.get("payment_session_id", ""), event.get("idempotency_key")
+
 
 adapter: PaymentAdapter = MockPay()
 
@@ -354,7 +399,10 @@ async def create_reservation(payload: dict, db: Session = Depends(get_db)):
 
     rid = uuid.uuid4().hex
     expires_at = now_ts() + RESERVATION_TTL_SECONDS
-    tb_hold_tickets(cls, qty, rid)
+    try:
+        tb_hold_tickets(cls, qty, rid)
+    except Exception:
+        raise HTTPException(409, detail="Sold out")
 
     res = Reservation(
         id=rid, cls=cls, qty=qty,
@@ -529,6 +577,12 @@ async def payments_webhook(request: Request, db: Session = Depends(get_db)):
         db.commit()
 
     return {"ok": True, "order_status": order.status}
+
+
+@app.get("/api/inventory")
+async def get_inventory(db: Session = Depends(get_db)):
+    return compute_inventory(db)
+
 
 # ----------------------------
 # MockPay UI (simple page with 3 buttons)
