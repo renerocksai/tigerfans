@@ -6,10 +6,7 @@
   <h2 class="text-2xl font-semibold">Admin</h2>
   <div class="mt-4 grid sm:grid-cols-2 gap-4">
     <div class="glass squircle p-4">
-      <p><strong>Goodies A used:</strong> {{ goodies_a }} / {{ goodie_limit }}</p>
-    </div>
-    <div class="glass squircle p-4">
-      <p><strong>Goodies B used:</strong> {{ goodies_b }} / {{ goodie_limit }}</p>
+      <p><strong>Goodies used:</strong> {{ goodies }} / {{ goodie_limit }}</p>
     </div>
   </div>
 
@@ -23,6 +20,7 @@
           <th class="py-2 pr-4">Qty</th>
           <th class="py-2 pr-4">Amount</th>
           <th class="py-2 pr-4">Paid at</th>
+          <th class="py-2 pr-4">Ticket Code</th>
           <th class="py-2 pr-4">Goodie</th>
         </tr>
       </thead>
@@ -39,6 +37,7 @@
             <td class="py-2 pr-4">{{ o.qty }}</td>
             <td class="py-2 pr-4">EUR {{ '%.2f' % (o.amount/100) }}</td>
             <td class="py-2 pr-4">{{ o.paid_at_iso or '-' }}</td>
+            <td class="py-2 pr-4">{{ o.ticket_code or '-' }}</td>
             <td class="py-2 pr-4">{{ 'yes' if o.got_goodie else 'no' }}</td>
           </tr>
         {% endfor %}

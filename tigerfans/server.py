@@ -1,16 +1,16 @@
 """
-Ticketing Demo Skeleton (FastAPI + MockPay adapter + TigerBeetle placeholders + SQLite)
------------------------------------------------------------------------------
+Ticketing Demo  (FastAPI + MockPay adapter + TigerBeetle + SQLite)
+------------------------------------------------------------------
 Goals:
 - Two ticket classes: A (premium) and B (standard)
-- First 100 successful buyers per class receive a goodie
+- First 100 successful buyers receive a goodie
   (via TigerBeetle transfer from a pool)
 - Mock payment provider with redirect + webhook flow
-- Clean adapter boundary so you can later swap in Stripe
+- Clean adapter boundary so we can later swap in Stripe
 - **SQLite instead of in-memory** so the demo persists and survives restarts
 
 Run locally:
-  uvicorn ticketing_demo_fastapi_mockpay_tigerbeetle_skeleton:app --reload
+  uvicorn tigerfans/server:app --reload
 
 Env (optional):
   MOCK_WEBHOOK_URL="http://localhost:8000/payments/webhook"
@@ -18,9 +18,7 @@ Env (optional):
   DATABASE_URL="sqlite:///./demo.db"  (default)
 
 Notes:
-- All TigerBeetle interactions are stubbed via tb_* functions.
-- SQLite is used for persistence. For a demo and single-node setup it works
-  well; see README notes at bottom of file.
+- SQLite is used for persistence. For a demo and single-node setup it works well.
 """
 from __future__ import annotations
 
@@ -77,7 +75,7 @@ RESERVATION_TTL_SECONDS = 15 * 60
 
 SESSION_SECRET = os.environ.get("SESSION_SECRET", "dev-secret-change-me")
 ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")
-ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "supersecret")
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "supasecret")
 
 
 # ----------------------------
@@ -435,16 +433,16 @@ async def admin_logout(request: Request):
 
 # Admin page
 @app.get("/admin", response_class=HTMLResponse)
-async def admin_page(request: Request, db: Session = Depends(get_db)):
+async def admin_page(request: Request, db: Session = Depends(get_db), client: "tb.ClientSync" = Depends(get_tb_client)):
     if not is_admin(request):
         dest = request.url.path
         return RedirectResponse(url=f"/admin/login?next={dest}", status_code=307)
 
     rows = db.execute(
-        text("SELECT id, status, cls, qty, amount, currency, paid_at, got_goodie FROM orders ORDER BY created_at DESC LIMIT 200")
+        text("SELECT id, status, cls, qty, amount, currency, paid_at, got_goodie, ticket_code FROM orders ORDER BY created_at DESC LIMIT 200")
     ).all()
     orders = []
-    for (oid, status, cls, qty, amount, currency, paid_at, got_goodie) in rows:
+    for (oid, status, cls, qty, amount, currency, paid_at, got_goodie, ticket_code) in rows:
         paid_iso = '-' if paid_at is None else datetime.fromtimestamp(paid_at, tz=timezone.utc).isoformat()
         orders.append({
             "id": oid,
@@ -455,26 +453,16 @@ async def admin_page(request: Request, db: Session = Depends(get_db)):
             "currency": currency,
             "paid_at_iso": paid_iso,
             "got_goodie": got_goodie,
+            "ticket_code": ticket_code,
         })
-    a = db.get(GoodiesCounter, 'A')
-    b = db.get(GoodiesCounter, 'B')
+    goodies_count = tigerbeetledb.count_goodies(client)
     return templates.TemplateResponse(
         "admin.html",
         {
             "request": request,
             "orders": orders,
-            "goodies_a": (a.granted if a else 0),
-            "goodies_b": (b.granted if b else 0),
-            "goodie_limit": GOODIE_LIMIT_PER_CLASS,
+            "goodies": goodies_count,
+            "goodie_limit": tigerbeetledb.TicketAmount_first_n,
             "site_name": "TigerFans",
         }
     )
-
-# ----------------------------
-# README notes (SQLite performance quick tips)
-# ----------------------------
-# - SQLite is great for a single-node demo and small/medium traffic. With WAL mode it's fine for many readers and a single writer.
-# - Avoid running multiple gunicorn/uvicorn workers writing to the same SQLite file. Prefer a single process with async I/O.
-# - If you need higher write concurrency, move to Postgres. Keep the adapter boundary so the migration is easy.
-# - Webhooks: keep fulfillment idempotent; DB has FulfillmentKey + WebhookEventSeen as guards.
-

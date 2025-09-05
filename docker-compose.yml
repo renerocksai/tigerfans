@@ -1,0 +1,53 @@
+# super-hack for TB IP: define custom bridge network with static subnet and IP
+networks:
+  tbnet:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16
+
+services:
+  tb:
+    build:
+      context: .
+      dockerfile: Dockerfile.tb
+    # TB must see and advertise a literal IP
+    command: ["/tb/start_tigerbeetle.sh"]
+    environment:
+      TB_ADDRESS: "172.28.0.10:3000"   # used by  script to pass --addresses
+      TB_DATA_DIR: "/tb/data"
+      TB_CLUSTER_ID: "0"
+      TB_REPLICA_ID: "0"
+      TB_REPLICA_COUNT: "1"
+    networks:
+      tbnet:
+        ipv4_address: 172.28.0.10
+    volumes:
+      - tbdata:/tb/data
+    # important for TB in Docker per docs
+    security_opt:
+      - "seccomp=unconfined"
+    # no healthcheck
+    restart: unless-stopped
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      DATABASE_URL: "sqlite:////data/demo.db"
+      TB_ADDRESS: "172.28.0.10:3000"   # literal IP, not tb:3000
+      MOCK_WEBHOOK_URL: "http://app:8000/payments/webhook"
+    networks:
+      - tbnet
+    volumes:
+      - appdata:/data
+    ports:
+      - "8000:8000"
+    depends_on:
+      - tb
+    restart: unless-stopped
+
+volumes:
+  appdata:
+  tbdata:

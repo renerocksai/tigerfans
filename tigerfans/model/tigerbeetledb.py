@@ -257,7 +257,7 @@ def cancel_order(client: tb.ClientSync, tb_transfer_id: str | int, goodie_tb_tra
     return None
 
 
-def compute_inventory(client: tb.ClientSync):
+def compute_inventory(client: tb.ClientSync) -> dict:
     accounts = client.lookup_accounts([Class_A_spent.id, Class_B_spent.id])
     out = {}
     now = now_ts()
@@ -275,6 +275,11 @@ def compute_inventory(client: tb.ClientSync):
             "timestamp": to_iso(now),
         }
     return out
+
+
+def count_goodies(client: tb.ClientSync) -> int:
+    accounts = client.lookup_accounts([First_n_spent.id])
+    return accounts[0].credits_posted
 
 
 if __name__ == '__main__':

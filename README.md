@@ -1,5 +1,24 @@
 # ⭐ TigerFans
 
+## Run the demo in docker
+
+_(I tested this on an M3 Mac)_
+
+```console
+$ docker-compose up --build
+```
+Wait for the app to start:
+
+```
+app-1  | INFO:     Application startup complete.
+```
+
+Then connect your browser to [http://localhost:8000/](http://localhost:8000).
+
+To see the last 200 orders, go to
+[http://localhost:8000/admin](http://localhost:8000/admin) and log in with
+username `admin` and password `supasecret`.
+
 ## First-time setup
 
 * download and unzip [Tigerbeetle](https://tigerbeetle.com) into this directory.
@@ -32,3 +51,6 @@ $ uvicorn tigerfans.server:app --reload --port=8000
 ```
 Connect your browser to [http://localhost:8000/](http://localhost:8000).
 
+To see the last 200 orders, go to
+[http://localhost:8000/admin](http://localhost:8000/admin) and log in with
+username `admin` and password `supasecret`.

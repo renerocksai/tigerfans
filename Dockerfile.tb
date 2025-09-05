@@ -1,0 +1,42 @@
+FROM debian:bookworm-slim
+
+ARG TB_VERSION=0.16.57
+ARG TARGETARCH             # provided by Docker: amd64 | arm64
+
+WORKDIR /tb
+
+# deps to fetch/unzip
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      curl unzip ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+
+# Download pinned release matching architecture
+# Example URL: https://github.com/tigerbeetle/tigerbeetle/releases/download/0.15.20/tigerbeetle-x86_64-linux.zip
+RUN if [ "${TARGETARCH}" = "amd64" ]; then ARCH="x86_64-linux"; \
+    elif [ "${TARGETARCH}" = "arm64" ]; then ARCH="aarch64-linux"; \
+    else echo "Unsupported arch: ${TARGETARCH}" && exit 1; fi \
+ && URL="https://github.com/tigerbeetle/tigerbeetle/releases/download/${TB_VERSION}/tigerbeetle-${ARCH}.zip" \
+ && echo "downloading $URL" \
+ && curl -fL -o tigerbeetle.zip "$URL" \
+ && unzip tigerbeetle.zip \
+ && rm tigerbeetle.zip \
+ && chmod +x ./tigerbeetle
+
+# Copy portable start script (uses ./data by default)
+COPY start_tigerbeetle.sh /tb/start_tigerbeetle.sh
+RUN chmod +x /tb/start_tigerbeetle.sh
+
+ENV TB_DATA_DIR=/tb/data \
+    TB_CLUSTER_ID=0 \
+    TB_REPLICA_ID=0 \
+    TB_REPLICA_COUNT=1 \
+    TB_ADDRESS=172.28.0.10:3000
+
+# Data will live in /tb/data (volume)
+ENV TB_DATA_DIR=/tb/data
+VOLUME ["/tb/data"]
+
+
+
+EXPOSE 3000
+CMD ["/tb/start_tigerbeetle.sh"]
