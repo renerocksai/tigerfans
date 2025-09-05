@@ -37,6 +37,7 @@ class PaymentAdapter(ABC):
     def event_ids(self, event: dict) -> Tuple[str, Optional[str]]:  # (payment_session_id, idempotency_key)
         ...
 
+
 # ----------------------------
 # MockPay implementation
 # ----------------------------

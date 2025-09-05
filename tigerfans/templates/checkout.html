@@ -164,7 +164,7 @@
       });
 
       const elapsed = Date.now() - start;
-      const minDelay = 700;
+      const minDelay = 300;
       if (elapsed < minDelay) await new Promise(r => setTimeout(r, minDelay - elapsed));
 
       if (!res.ok) {

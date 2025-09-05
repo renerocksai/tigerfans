@@ -62,7 +62,8 @@
     errBox.classList.remove('hidden');
   }
 
-  function renderTickets(tickets, gotGoodie) {
+  function renderTickets(ticket_code, gotGoodie) {
+    if (ticket_code === null) return;
     ticketsEl.innerHTML = '';
     if (gotGoodie) {
       const perk = document.createElement('p');
@@ -70,62 +71,60 @@
       perk.textContent = '🎁 Bonus granted!';
       ticketsEl.appendChild(perk);
     }
-    tickets.forEach((code, idx) => {
-      const card = document.createElement('div');
-      card.className = 'p-4 squircle bg-slate-900 border border-white/10';
 
-      const header = document.createElement('div');
-      header.className = 'flex items-center justify-between gap-2';
-      header.innerHTML = `
-        <div>
-          <!-- <div class="text-sm text-slate-400">Ticket ${idx + 1}</div> -->
-          <div class="text-sm text-slate-400">Your Ticket</div>
-          <div class="font-mono text-lg text-white">${code}</div>
-        </div>
-        <div class="text-xs text-slate-400">Show this QR at registration</div>
-      `;
-      card.appendChild(header);
+    const card = document.createElement('div');
+    card.className = 'p-4 squircle bg-slate-900 border border-white/10';
 
-      const qrWrap = document.createElement('div');
-      qrWrap.className = 'mt-3 flex items-center gap-4 flex-wrap';
-      const qrBox = document.createElement('div');
-      qrBox.id = 'qr_' + idx;
-      qrBox.className = 'p-2 squircle bg-white';
-      qrWrap.appendChild(qrBox);
+    const header = document.createElement('div');
+    header.className = 'flex items-center justify-between gap-2';
+    header.innerHTML = `
+      <div>
+        <div class="text-sm text-slate-400">Your Ticket</div>
+        <div class="font-mono text-lg text-white">${ticket_code}</div>
+      </div>
+      <div class="text-xs text-slate-400">Show this QR at registration</div>
+    `;
+    card.appendChild(header);
 
-      const actions = document.createElement('div');
-      actions.className = 'flex flex-col gap-2';
-      const saveBtn = document.createElement('button');
-      saveBtn.className = 'px-3 py-1 squircle bg-brand-500 hover:bg-brand-400 text-white text-sm transition';
-      saveBtn.textContent = 'Download QR-Code';
-      actions.appendChild(saveBtn);
-      qrWrap.appendChild(actions);
+    const qrWrap = document.createElement('div');
+    qrWrap.className = 'mt-3 flex items-center gap-4 flex-wrap';
+    const qrBox = document.createElement('div');
+    qrBox.id = 'qr_';
+    qrBox.className = 'p-2 squircle bg-white';
+    qrWrap.appendChild(qrBox);
 
-      card.appendChild(qrWrap);
-      ticketsEl.appendChild(card);
+    const actions = document.createElement('div');
+    actions.className = 'flex flex-col gap-2';
+    const saveBtn = document.createElement('button');
+    saveBtn.className = 'px-3 py-1 squircle bg-brand-500 hover:bg-brand-400 text-white text-sm transition';
+    saveBtn.textContent = 'Download QR-Code';
+    actions.appendChild(saveBtn);
+    qrWrap.appendChild(actions);
 
-      // Generate QR (content = ticket code)
-      const qr = new QRCode(qrBox, {
-        text: code,
-        width: 160,
-        height: 160,
-        correctLevel: QRCode.CorrectLevel.M
-      });
+    card.appendChild(qrWrap);
+    ticketsEl.appendChild(card);
 
-      // Download as PNG
-      saveBtn.onclick = () => {
-        // qrcodejs renders a <canvas> (or img). Prefer canvas.
-        const canvas = qrBox.querySelector('canvas');
-        const dataUrl = canvas ? canvas.toDataURL('image/png') : qrBox.querySelector('img')?.src;
-        if (!dataUrl) return;
-        const a = document.createElement('a');
-        a.href = dataUrl;
-        a.download = `${code}.png`;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-      };
+    // Generate QR (content = ticket code)
+    const qr = new QRCode(qrBox, {
+      text: ticket_code,
+      width: 160,
+      height: 160,
+      correctLevel: QRCode.CorrectLevel.M
     });
+
+    // Download as PNG
+    saveBtn.onclick = () => {
+      // qrcodejs renders a <canvas> (or img). Prefer canvas.
+      const canvas = qrBox.querySelector('canvas');
+      const dataUrl = canvas ? canvas.toDataURL('image/png') : qrBox.querySelector('img')?.src;
+      if (!dataUrl) return;
+      const a = document.createElement('a');
+      a.href = dataUrl;
+      a.download = `${ticket_code}.png`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    };
   }
 
   async function tick() {
@@ -135,7 +134,7 @@
       // Update status line (light until paid)
       if (j.status === 'PAID') {
         setPaidUI();
-        renderTickets(j.tickets || [], j.got_goodie);
+        renderTickets(j.ticket_code, j.got_goodie);
         clearInterval(timer);
       } else if (j.status === 'PAID_UNFULFILLED') {
         setUnfulfilledUI();

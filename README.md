@@ -2,7 +2,8 @@
 
 ## First-time setup
 
-* download tigerbeetle into this directory
+* download and unzip [Tigerbeetle](https://tigerbeetle.com) into this directory.
+See [here](https://tigerbeetle.com/#install) how to.
 
 ### Create environment for python
 
@@ -12,13 +13,14 @@ $ source venv/bin/activate
 $ pip install -r requirements.txt
 ```
 
-### Init Tigerbeetle
+## Start TigerFans:
+
+### Start Tigerbeetle
 
 ```console
 
 # init and start tigerbeetle
-$ ./init_tigerbeetle.sh
-$ python tigerfans/modeltigerbeetle.py
+$ ./start_tigerbeetle.sh
 ```
 
 ### Start the server
@@ -26,6 +28,7 @@ $ python tigerfans/modeltigerbeetle.py
 With Tigerbeetle running:
 
 ```console
-$ uvicorn tigerfans.server:app --reload --port=8888
+$ uvicorn tigerfans.server:app --reload --port=8000
 ```
+Connect your browser to [http://localhost:8000/](http://localhost:8000).
 

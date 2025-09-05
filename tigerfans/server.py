@@ -42,7 +42,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 
-from .model import tigerbeetle
+from .model import tigerbeetledb
 
 from sqlalchemy.orm import sessionmaker, Session
 
@@ -53,11 +53,12 @@ from sqlalchemy import (
     text,
 )
 from .model.db import (
-    Reservation, Order, PaymentSession, WebhookEventSeen, FulfillmentKey,
-    GoodiesCounter, make_engine
+    Order, PaymentSession, WebhookEventSeen, FulfillmentKey, make_engine
 )
 from .helpers import now_ts, to_iso, is_valid_email, ct_equal
 from .mockpay import PaymentAdapter, MockPay, MOCK_SECRET
+
+import tigerbeetle as tb
 
 templates = Jinja2Templates(directory="tigerfans/templates")
 
@@ -70,12 +71,8 @@ MOCK_WEBHOOK_URL = os.environ.get(
 )
 DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./demo.db")
 
-INVENTORY_CAPACITY = {
-    "A": tigerbeetle.TicketAmount_Class_A,
-    "B": tigerbeetle.TicketAmount_Class_B
-}  # demo numbers; adjust to your event
 TICKET_CLASSES = {"A": {"price": 6500}, "B": {"price": 3500}}  # cents (EUR)
-GOODIE_LIMIT_PER_CLASS = tigerbeetle.TicketAmount_first_n
+GOODIE_LIMIT_PER_CLASS = tigerbeetledb.TicketAmount_first_n
 RESERVATION_TTL_SECONDS = 15 * 60
 
 SESSION_SECRET = os.environ.get("SESSION_SECRET", "dev-secret-change-me")
@@ -90,12 +87,42 @@ engine = make_engine(DATABASE_URL)
 SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False,
                             future=True)
 
-# seed goodies counter rows
-with SessionLocal() as db:
-    for c in ("A", "B"):
-        if not db.get(GoodiesCounter, c):
-            db.add(GoodiesCounter(cls=c, granted=0))
-    db.commit()
+
+
+
+
+adapter: PaymentAdapter = MockPay()
+
+
+# ----------------------------
+# FastAPI app
+# ----------------------------
+app = FastAPI(title="Ticketing Demo with MockPay & TigerBeetle stubs (SQLite)")
+app.mount("/static", StaticFiles(directory="tigerfans/static"), name="static")
+app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET)
+
+
+# ---
+# tigerbeetle client
+# ---
+@app.on_event("startup")
+def _tb_start():
+    # env or defaults; adjust cluster_id/address as needed
+    addr = os.getenv("TB_ADDRESS", "3000")
+    cluster_id = int(os.getenv("TB_CLUSTER_ID", "0"))
+    # create once per process; keep it on app.state
+    client = tb.ClientSync(cluster_id=cluster_id, replica_addresses=addr)
+    app.state.tb_client = client
+    if tigerbeetledb.create_accounts(client):
+        tigerbeetledb.initial_transfers(client)
+
+
+@app.on_event("shutdown")
+def _tb_stop():
+    client = getattr(app.state, "tb_client", None)
+    if client is not None:
+        client.close()
+        app.state.tb_client = None
 
 
 # ----------------------------
@@ -109,6 +136,14 @@ def get_db() -> Session:
         db.close()
 
 
+def get_tb_client() -> "tb.ClientSync":
+    client = getattr(app.state, "tb_client", None)
+    if client is None:
+        # Shouldn't happen after startup, but be explicit
+        raise RuntimeError("TigerBeetle client not initialized")
+    return client
+
+
 def is_admin(request: Request) -> bool:
     return bool(request.session.get("admin_user"))
 
@@ -120,58 +155,6 @@ def require_admin(request: Request) -> None:
         raise HTTPException(status_code=307, detail="redirect to login",
                             headers={"Location": f"/admin/login?next={dest}"})
 
-
-def compute_inventory(db: Session):
-    now = now_ts()
-    # sold = paid orders
-    sold_by_cls = {c: 0 for c in TICKET_CLASSES}
-    rows = db.execute(text("""
-        SELECT cls, COUNT(*)
-        FROM orders
-        WHERE status = 'PAID'
-        GROUP BY cls
-    """)).all()
-    for cls, cnt in rows:
-        sold_by_cls[cls] = int(cnt)
-
-    # active holds = reservations not expired
-    holds_by_cls = {c: 0 for c in TICKET_CLASSES}
-    rows = db.execute(text("""
-        SELECT cls, COUNT(*)
-        FROM reservations
-        WHERE status = 'ACTIVE' AND expires_at > :now
-        GROUP BY cls
-    """), {"now": now}).all()
-    for cls, cnt in rows:
-        holds_by_cls[cls] = int(cnt)
-
-    # compute availability
-    out = {}
-    for cls in TICKET_CLASSES.keys():
-        capacity = INVENTORY_CAPACITY.get(cls, 0)
-        sold = sold_by_cls.get(cls, 0)
-        holds = holds_by_cls.get(cls, 0)
-        available = max(0, capacity - sold - holds)
-        out[cls] = {
-            "capacity": capacity,
-            "sold": sold,
-            "active_holds": holds,
-            "available": available,
-            "sold_out": available <= 0,
-            "timestamp": to_iso(now),
-        }
-    return out
-
-
-adapter: PaymentAdapter = MockPay()
-
-
-# ----------------------------
-# FastAPI app
-# ----------------------------
-app = FastAPI(title="Ticketing Demo with MockPay & TigerBeetle stubs (SQLite)")
-app.mount("/static", StaticFiles(directory="tigerfans/static"), name="static")
-app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET)
 
 # ----------------------------
 # Landing page
@@ -190,34 +173,6 @@ async def landing_page(request: Request):
 
 
 # ----------------------------
-# API: Create Reservation
-# ----------------------------
-@app.post("/api/reservations")
-async def create_reservation(payload: dict, db: Session = Depends(get_db)):
-    cls = payload.get("cls")
-    qty = 1  # single-ticket policy
-    if cls not in TICKET_CLASSES:
-        raise HTTPException(400, detail="invalid class")
-
-    rid = uuid.uuid4().hex
-    expires_at = now_ts() + RESERVATION_TTL_SECONDS
-    try:
-        tigerbeetle.hold_tickets(cls, qty, rid)
-    except Exception:
-        raise HTTPException(409, detail="Sold out")
-
-    res = Reservation(
-        id=rid, cls=cls, qty=qty,
-        created_at=now_ts(),
-        expires_at=expires_at,
-        status="ACTIVE",
-    )
-    db.add(res)
-    db.commit()
-    return {"reservation_id": rid, "cls": cls, "qty": qty, "expires_at": to_iso(expires_at)}
-
-
-# ----------------------------
 # Checkout page (force 1 ticket, require email)
 # ----------------------------
 @app.get("/demo/checkout", response_class=HTMLResponse)
@@ -229,8 +184,7 @@ async def demo_checkout_page(request: Request, status: Optional[str] = None, ord
 
 
 @app.post("/api/checkout")
-async def create_checkout(payload: dict, db: Session = Depends(get_db)):
-    reservation_id = payload.get("reservation_id")
+async def create_checkout(payload: dict, db: Session = Depends(get_db), client: "tb.ClientSync" = Depends(get_tb_client)):
     cls = payload.get("cls")
     # Enforce single-ticket policy
     qty = 1
@@ -239,40 +193,17 @@ async def create_checkout(payload: dict, db: Session = Depends(get_db)):
     if not is_valid_email(customer_email):
         raise HTTPException(400, detail="customer_email is required and must be a valid email address")
 
-    if reservation_id:
-        res = db.get(Reservation, reservation_id)
-        if not res:
-            raise HTTPException(404, detail="reservation not found")
-        if res.status != "ACTIVE" or res.expires_at <= now_ts():
-            res.status = "EXPIRED"
-            db.commit()
-            tigerbeetle.rollback_reservation(reservation_id)
-            raise HTTPException(409, detail="reservation expired")
-        cls = res.cls
-        # Even if an older reservation had qty>1, enforce single-ticket policy
-        qty = 1
-    else:
-        if cls not in TICKET_CLASSES:
-            raise HTTPException(400, detail="invalid class")
-        # Implicit hold for exactly 1 ticket when no reservation provided
-        reservation_id = uuid.uuid4().hex
-        tigerbeetle.hold_tickets(cls, qty, reservation_id)
-        res = Reservation(
-            id=reservation_id,
-            cls=cls,
-            qty=qty,
-            created_at=now_ts(),
-            expires_at=now_ts() + RESERVATION_TTL_SECONDS,
-            status="ACTIVE",
-        )
-        db.add(res)
-        db.commit()
+    if cls not in TICKET_CLASSES:
+        raise HTTPException(400, detail="invalid ticket class")
+
+    tb_transfer_id, goodie_tb_transfer_id = tigerbeetledb.hold_tickets(client, cls, qty, RESERVATION_TTL_SECONDS)
 
     amount = TICKET_CLASSES[cls]["price"] * qty
     order_id = uuid.uuid4().hex
     order = Order(
         id=order_id,
-        reservation_id=reservation_id,
+        tb_transfer_id = str(tb_transfer_id),
+        goodie_tb_transfer_id = str(goodie_tb_transfer_id),
         cls=cls,
         qty=qty,
         amount=amount,
@@ -304,8 +235,7 @@ async def get_order(order_id: str, db: Session = Depends(get_db)):
     order = db.get(Order, order_id)
     if not order:
         raise HTTPException(404, detail="order not found")
-    tickets = (order.tickets_csv or "").split(",") if order.tickets_csv else []
-    goodies = db.get(GoodiesCounter, order.cls)
+    ticket_code = order.ticket_code or ""
     return {
         "order_id": order.id,
         "status": order.status,
@@ -314,16 +244,16 @@ async def get_order(order_id: str, db: Session = Depends(get_db)):
         "amount": order.amount,
         "currency": order.currency,
         "paid_at": to_iso(order.paid_at),
-        "tickets": tickets,
+        "ticket_code": ticket_code,
         "got_goodie": order.got_goodie,
-        "goodies_granted_in_class": goodies.granted if goodies else 0,
     }
+
 
 # ----------------------------
 # Webhook endpoint (shared for Mock/Stripe)
 # ----------------------------
 @app.post("/payments/webhook")
-async def payments_webhook(request: Request, db: Session = Depends(get_db)):
+async def payments_webhook(request: Request, db: Session = Depends(get_db), client: "tb.ClientSync" = Depends(get_tb_client)):
     payload = await request.body()
     headers = dict(request.headers)
 
@@ -353,27 +283,27 @@ async def payments_webhook(request: Request, db: Session = Depends(get_db)):
         return {"ok": True, "idempotent": True}
 
     if kind == "succeeded":
+
         # 1) Commit reservation via TigerBeetle
-        tigerbeetle.commit_order(order)
+        gets_ticket, gets_goodie = tigerbeetledb.commit_order(client, order.tb_transfer_id, order.goodie_tb_transfer_id, order.cls, order.qty)
 
-        # 2) Issue tickets (one code per unit)
-        tickets = [f"TCK-{uuid.uuid4().hex[:10].upper()}" for _ in range(order.qty)]
-        order.tickets_csv = ",".join(tickets)
+        if gets_ticket:
+            # 2) Issue tickets (one code per unit)
+            order.ticket_code = f"TCK-{uuid.uuid4().hex[:10].upper()}"
 
-        # 3) Goodie attempt (first 100 per class) — should be atomic in TB in real code
-        user_id = order.customer_email or f"anonymous:{order.id}"
-        order.got_goodie = tigerbeetle.try_grant_goodie(db, order.cls, user_id, order.id)
+            # 3) Goodie attempt (first 100 per class) — should be atomic in TB in real code
+            order.got_goodie = gets_goodie
 
-        # 4) Update order
-        order.status = "PAID"
+            # 4) Update order
+            order.status = "PAID"
+        else:
+            order.status = 'PAID UNFULFILLED'
         order.paid_at = now_ts()
         db.add(FulfillmentKey(key=fulfill_key))
         db.commit()
 
     elif kind in ("failed", "canceled"):
-        # Rollback reservation & release hold
-        if order.reservation_id:
-            tigerbeetle.rollback_reservation(order.reservation_id)
+        tigerbeetledb.cancel_order(client, order.tb_transfer_id, order.goodie_tb_transfer_id, order.cls, order.qty)
         order.status = "FAILED" if kind == "failed" else "CANCELED"
         db.add(FulfillmentKey(key=fulfill_key))
         db.commit()
@@ -382,8 +312,8 @@ async def payments_webhook(request: Request, db: Session = Depends(get_db)):
 
 
 @app.get("/api/inventory")
-async def get_inventory(db: Session = Depends(get_db)):
-    return compute_inventory(db)
+async def get_inventory(client: "tb.ClientSync" = Depends(get_tb_client)):
+    return tigerbeetledb.compute_inventory(client)
 
 
 # ----------------------------
@@ -475,6 +405,7 @@ async def demo_success_page(request: Request, order_id: str, db: Session = Depen
 @app.get("/admin/login", response_class=HTMLResponse)
 async def admin_login_get(request: Request, next: str | None = "/admin"):
     return templates.TemplateResponse("login.html", {"request": request, "next": next, "error": None})
+
 
 @app.post("/admin/login", response_class=HTMLResponse)
 async def admin_login_post(

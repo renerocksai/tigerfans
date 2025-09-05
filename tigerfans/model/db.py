@@ -1,4 +1,4 @@
-from sqlalchemy.orm import declarative_base, sessionmaker, Session
+from sqlalchemy.orm import declarative_base
 from sqlalchemy import (
     Column,
     Integer,
@@ -6,9 +6,9 @@ from sqlalchemy import (
     Float,
     Boolean,
     create_engine,
-    UniqueConstraint,
+    # UniqueConstraint,
     event,
-    text,
+    # text,
 )
 
 
@@ -18,41 +18,29 @@ Base = declarative_base()
 # ----------------------------
 # ORM models
 # ----------------------------
-class Reservation(Base):
-    __tablename__ = "reservations"
-    id = Column(String, primary_key=True)
-    cls = Column(String, nullable=False)
-    qty = Column(Integer, nullable=False)
-    created_at = Column(Float, nullable=False)
-    expires_at = Column(Float, nullable=False)
-    # ACTIVE | EXPIRED | CANCELED | CONVERTED
-    status = Column(String, nullable=False)
-
-
 class Order(Base):
     __tablename__ = "orders"
     id = Column(String, primary_key=True)
-    reservation_id = Column(String, nullable=True)
+    tb_transfer_id = Column(String, nullable=False, unique=True)
+    goodie_tb_transfer_id = Column(String, nullable=False, unique=True)
     cls = Column(String, nullable=False)
     qty = Column(Integer, nullable=False)
     amount = Column(Integer, nullable=False)  # cents
     currency = Column(String, nullable=False, default="eur")
-    customer_email = Column(String, nullable=True)
+    customer_email = Column(String, nullable=False)
 
     # PENDING | PAID | FAILED | CANCELED | REFUNDED
     status = Column(String, nullable=False, default="PENDING")
     created_at = Column(Float, nullable=False)
     paid_at = Column(Float, nullable=True)
-    payment_session_id = Column(String, nullable=True)
+
+    ticket_code = Column(String, nullable=True, unique=True)
+    got_goodie = Column(Boolean, nullable=False, default=False)
 
     # for Stripe; unused in Mock
     payment_intent_id = Column(String, nullable=True)
-
     # for Stripe; unused in Mock
     charge_id = Column(String, nullable=True)
-
-    tickets_csv = Column(String, nullable=True)  # comma-separated ticket codes
-    got_goodie = Column(Boolean, nullable=False, default=False)
 
 
 class PaymentSession(Base):
@@ -72,12 +60,6 @@ class WebhookEventSeen(Base):
 class FulfillmentKey(Base):
     __tablename__ = "fulfillment_keys"
     key = Column(String, primary_key=True)  # order_id:session_id
-
-
-class GoodiesCounter(Base):
-    __tablename__ = "goodies_counter"
-    cls = Column(String, primary_key=True)
-    granted = Column(Integer, nullable=False, default=0)
 
 
 def make_engine(DATABASE_URL):
@@ -102,4 +84,3 @@ def make_engine(DATABASE_URL):
 
     Base.metadata.create_all(bind=engine)
     return engine
-
