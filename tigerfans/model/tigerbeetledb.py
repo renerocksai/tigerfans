@@ -4,8 +4,8 @@ from typing import Tuple
 from ..helpers import now_ts, to_iso
 
 # Config
-TicketAmount_Class_A = 1_000
-TicketAmount_Class_B = 100_000
+TicketAmount_Class_A = 100
+TicketAmount_Class_B = 500
 TicketAmount_first_n = 100
 
 RestartCounter_max = 1_000_000
@@ -190,7 +190,7 @@ def commit_order(client: tb.ClientSync, tb_transfer_id: str | int, goodie_tb_tra
             debit_account_id=First_n_budget.id,
             credit_account_id=First_n_spent.id,
             amount=1,
-            pending_id=tb_transfer_id,
+            pending_id=goodie_tb_transfer_id,
             ledger=LedgerTickets,
             code=20,
             flags=tb.TransferFlags.POST_PENDING_TRANSFER,
@@ -199,6 +199,7 @@ def commit_order(client: tb.ClientSync, tb_transfer_id: str | int, goodie_tb_tra
 
     has_ticket = True
     has_goodie = True
+    print(transfer_errors)
     for transfer_error in transfer_errors:
         if transfer_error.index == 0:
             has_ticket = False
@@ -243,7 +244,7 @@ def cancel_order(client: tb.ClientSync, tb_transfer_id: str | int, goodie_tb_tra
             debit_account_id=First_n_budget.id,
             credit_account_id=First_n_spent.id,
             amount=1,
-            pending_id=tb_transfer_id,
+            pending_id=goodie_tb_transfer_id,
             ledger=LedgerTickets,
             code=20,
             flags=tb.TransferFlags.VOID_PENDING_TRANSFER,
