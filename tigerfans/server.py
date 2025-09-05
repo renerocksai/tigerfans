@@ -3,8 +3,9 @@ Ticketing Demo Skeleton (FastAPI + MockPay adapter + TigerBeetle placeholders + 
 -----------------------------------------------------------------------------
 Goals:
 - Two ticket classes: A (premium) and B (standard)
-- First 100 successful buyers per class receive a goodie (via TigerBeetle transfer from a pool)
-- Mock payment provider with redirect + webhook flow to keep Stripe complexity out
+- First 100 successful buyers per class receive a goodie
+  (via TigerBeetle transfer from a pool)
+- Mock payment provider with redirect + webhook flow
 - Clean adapter boundary so you can later swap in Stripe
 - **SQLite instead of in-memory** so the demo persists and survives restarts
 
@@ -17,9 +18,9 @@ Env (optional):
   DATABASE_URL="sqlite:///./demo.db"  (default)
 
 Notes:
-- All TigerBeetle interactions are stubbed via tb_* functions. Replace with your real TB RPCs.
-- SQLite is used for persistence. For a demo and single-node setup it works well; see README notes at bottom of file.
-- Everything is in **English** (UI, comments, code).
+- All TigerBeetle interactions are stubbed via tb_* functions.
+- SQLite is used for persistence. For a demo and single-node setup it works
+  well; see README notes at bottom of file.
 """
 from __future__ import annotations
 
@@ -31,7 +32,6 @@ import os
 import time
 import uuid
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple, TypedDict
 
@@ -63,14 +63,16 @@ from starlette.middleware.sessions import SessionMiddleware
 from starlette.status import HTTP_303_SEE_OTHER
 from fastapi.responses import RedirectResponse
 
-templates = Jinja2Templates(directory="templates")
-
+templates = Jinja2Templates(directory="tigerfans/templates")
 
 
 # ----------------------------
 # Config & Constants
 # ----------------------------
-MOCK_WEBHOOK_URL = os.environ.get("MOCK_WEBHOOK_URL", "http://localhost:8000/payments/webhook")
+MOCK_WEBHOOK_URL = os.environ.get(
+    "MOCK_WEBHOOK_URL",
+    "http://localhost:8000/payments/webhook"
+)
 MOCK_SECRET = os.environ.get("MOCK_SECRET", "supersecret")
 DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./demo.db")
 
@@ -89,7 +91,9 @@ ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "supersecret")
 engine = create_engine(
     DATABASE_URL,
     future=True,
-    connect_args={"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {},
+    connect_args={
+        "check_same_thread": False
+    } if DATABASE_URL.startswith("sqlite") else {},
     pool_pre_ping=True,
 )
 
@@ -103,7 +107,8 @@ if DATABASE_URL.startswith("sqlite"):
         cursor.execute("PRAGMA synchronous=NORMAL;")
         cursor.close()
 
-SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False, future=True)
+SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False,
+                            future=True)
 Base = declarative_base()
 
 
@@ -117,7 +122,9 @@ class Reservation(Base):
     qty = Column(Integer, nullable=False)
     created_at = Column(Float, nullable=False)
     expires_at = Column(Float, nullable=False)
-    status = Column(String, nullable=False)  # ACTIVE | EXPIRED | CANCELED | CONVERTED
+    # ACTIVE | EXPIRED | CANCELED | CONVERTED
+    status = Column(String, nullable=False)
+
 
 class Order(Base):
     __tablename__ = "orders"
@@ -128,14 +135,22 @@ class Order(Base):
     amount = Column(Integer, nullable=False)  # cents
     currency = Column(String, nullable=False, default="eur")
     customer_email = Column(String, nullable=True)
-    status = Column(String, nullable=False, default="PENDING")  # PENDING | PAID | FAILED | CANCELED | REFUNDED
+
+    # PENDING | PAID | FAILED | CANCELED | REFUNDED
+    status = Column(String, nullable=False, default="PENDING")
     created_at = Column(Float, nullable=False)
     paid_at = Column(Float, nullable=True)
     payment_session_id = Column(String, nullable=True)
-    payment_intent_id = Column(String, nullable=True)  # for Stripe; unused in Mock
-    charge_id = Column(String, nullable=True)          # for Stripe; unused in Mock
-    tickets_csv = Column(String, nullable=True)        # comma-separated ticket codes
+
+    # for Stripe; unused in Mock
+    payment_intent_id = Column(String, nullable=True)
+
+    # for Stripe; unused in Mock
+    charge_id = Column(String, nullable=True)
+
+    tickets_csv = Column(String, nullable=True)  # comma-separated ticket codes
     got_goodie = Column(Boolean, nullable=False, default=False)
+
 
 class PaymentSession(Base):
     __tablename__ = "payment_sessions"
@@ -145,18 +160,22 @@ class PaymentSession(Base):
     currency = Column(String, nullable=False)
     created_at = Column(Float, nullable=False)
 
+
 class WebhookEventSeen(Base):
     __tablename__ = "webhook_events_seen"
     idempotency_key = Column(String, primary_key=True)
+
 
 class FulfillmentKey(Base):
     __tablename__ = "fulfillment_keys"
     key = Column(String, primary_key=True)  # order_id:session_id
 
+
 class GoodiesCounter(Base):
     __tablename__ = "goodies_counter"
     cls = Column(String, primary_key=True)
     granted = Column(Integer, nullable=False, default=0)
+
 
 Base.metadata.create_all(bind=engine)
 
@@ -304,7 +323,7 @@ def tb_try_grant_goodie(db: Session, ticket_class: str, user_id: str, order_id: 
 # FastAPI app
 # ----------------------------
 app = FastAPI(title="Ticketing Demo with MockPay & TigerBeetle stubs (SQLite)")
-app.mount("/static", StaticFiles(directory="static"), name="static")
+app.mount("/static", StaticFiles(directory="tigerfans/static"), name="static")
 app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET)
 
 # ----------------------------
@@ -620,10 +639,12 @@ async def admin_login_post(
         status_code=401,
     )
 
+
 @app.get("/admin/logout")
 async def admin_logout(request: Request):
     request.session.clear()
     return RedirectResponse(url="/", status_code=HTTP_303_SEE_OTHER)
+
 
 # Admin page
 @app.get("/admin", response_class=HTMLResponse)
