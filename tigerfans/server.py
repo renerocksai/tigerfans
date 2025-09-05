@@ -439,10 +439,10 @@ async def admin_page(request: Request, db: Session = Depends(get_db), client: "t
         return RedirectResponse(url=f"/admin/login?next={dest}", status_code=307)
 
     rows = db.execute(
-        text("SELECT id, status, cls, qty, amount, currency, paid_at, got_goodie, ticket_code FROM orders ORDER BY created_at DESC LIMIT 200")
+        text("SELECT id, status, cls, qty, amount, currency, paid_at, got_goodie, ticket_code, customer_email FROM orders ORDER BY created_at DESC LIMIT 200")
     ).all()
     orders = []
-    for (oid, status, cls, qty, amount, currency, paid_at, got_goodie, ticket_code) in rows:
+    for (oid, status, cls, qty, amount, currency, paid_at, got_goodie, ticket_code, email) in rows:
         paid_iso = '-' if paid_at is None else datetime.fromtimestamp(paid_at, tz=timezone.utc).isoformat()
         orders.append({
             "id": oid,
@@ -454,6 +454,7 @@ async def admin_page(request: Request, db: Session = Depends(get_db), client: "t
             "paid_at_iso": paid_iso,
             "got_goodie": got_goodie,
             "ticket_code": ticket_code,
+            "email": email,
         })
     goodies_count = tigerbeetledb.count_goodies(client)
     return templates.TemplateResponse(
