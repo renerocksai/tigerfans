@@ -18,7 +18,7 @@ $ pip install -r requirements.txt
 
 # init and start tigerbeetle
 $ ./init_tigerbeetle.sh
-$ python init_accounts.py
+$ python tigerfans/modeltigerbeetle.py
 ```
 
 ### Start the server

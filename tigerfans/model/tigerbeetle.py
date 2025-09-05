@@ -1,5 +1,6 @@
 import os
 import tigerbeetle as tb
+from .db import Order, Session, GoodiesCounter
 
 # Config
 TicketAmount_Class_A = 1_000
@@ -106,6 +107,35 @@ def initial_transfers(client):
     assert len(transfer_errors) == 0
     print('✅ initial transfers executed')
     return
+
+
+# ----------------------------
+# TigerBeetle placeholders (replace with real TB RPCs)
+# ----------------------------
+# These are stubs; wire to your TB client.
+def hold_tickets(ticket_class: str, qty: int, reservation_id: str) -> None:
+    # TODO: call TB; raise on insufficient inventory
+    return None
+
+
+def commit_order(order: Order) -> None:
+    # TODO: TB: commit hold, settle money flows using order.id as transfer id
+    return None
+
+
+def rollback_reservation(reservation_id: str) -> None:
+    # TODO: TB: move hold back to inventory idempotently
+    return None
+
+
+def try_grant_goodie(db: Session, ticket_class: str, user_id: str, order_id: str) -> bool:
+    # In real life: TB atomic transfer goodie_pool:class -> goodie_user:user_id (idempotent via order_id)
+    row = db.get(GoodiesCounter, ticket_class)
+    if row.granted >= TicketAmount_first_n:
+        return False
+    row.granted += 1
+    db.commit()
+    return True
 
 
 if __name__ == '__main__':
