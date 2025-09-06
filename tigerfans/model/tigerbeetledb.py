@@ -114,7 +114,7 @@ def initial_transfers(client: tb.ClientSync):
     return
 
 
-def hold_tickets(client: tb.ClientSync, ticket_class: str, qty: int, timeout_seconds=int) -> Tuple[str, str]:
+def hold_tickets(client: tb.ClientSync, ticket_class: str, qty: int, timeout_seconds=int) -> Tuple[str, str, bool, bool]:
     # we issue 2 transfers: one for the actual tickets and one for the goodie
     # counter
     if ticket_class not in ['A', 'B']:
@@ -152,9 +152,15 @@ def hold_tickets(client: tb.ClientSync, ticket_class: str, qty: int, timeout_sec
             flags=tb.TransferFlags.PENDING,
         ),
     ])
-    if transfer_errors:
-        raise RuntimeError(transfer_errors)
-    return tb_transfer_id, goodie_tb_transfer_id
+
+    has_ticket = True
+    has_goodie = True
+    for transfer_error in transfer_errors:
+        if transfer_error.index == 0:
+            has_ticket = False
+        if transfer_error.index == 1:
+            has_goodie = False
+    return tb_transfer_id, goodie_tb_transfer_id, has_ticket, has_goodie
 
 
 def book_immediately(client: tb.ClientSync, ticket_class: str, qty: int) -> Tuple[str, str, bool, bool]:
@@ -221,7 +227,7 @@ def commit_order(client: tb.ClientSync, tb_transfer_id: str | int, goodie_tb_tra
     id_post = tb.id()
     id_post_goodies = tb.id()
 
-    transfer_errors = client.create_transfers([
+    transfers = [
         tb.Transfer(
             id=id_post,
             debit_account_id=debit_account_id,
@@ -232,20 +238,26 @@ def commit_order(client: tb.ClientSync, tb_transfer_id: str | int, goodie_tb_tra
             code=20,
             flags=tb.TransferFlags.POST_PENDING_TRANSFER,
         ),
-        tb.Transfer(
-            id=id_post_goodies,
-            debit_account_id=First_n_budget.id,
-            credit_account_id=First_n_spent.id,
-            amount=1,
-            pending_id=goodie_tb_transfer_id,
-            ledger=LedgerTickets,
-            code=20,
-            flags=tb.TransferFlags.POST_PENDING_TRANSFER,
-        ),
-    ])
+    ]
+
+    # only commit goodie if it hasn't failed before
+    if goodie_tb_transfer_id > 0:
+        transfers.append(
+            tb.Transfer(
+                id=id_post_goodies,
+                debit_account_id=First_n_budget.id,
+                credit_account_id=First_n_spent.id,
+                amount=1,
+                pending_id=goodie_tb_transfer_id,
+                ledger=LedgerTickets,
+                code=20,
+                flags=tb.TransferFlags.POST_PENDING_TRANSFER,
+            )
+        )
+    transfer_errors = client.create_transfers(transfers)
 
     has_ticket = True
-    has_goodie = True
+    has_goodie = goodie_tb_transfer_id > 0
     print(transfer_errors)
     for transfer_error in transfer_errors:
         if transfer_error.index == 0:

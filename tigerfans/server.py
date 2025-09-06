@@ -71,7 +71,7 @@ DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./demo.db")
 
 TICKET_CLASSES = {"A": {"price": 6500}, "B": {"price": 3500}}  # cents (EUR)
 GOODIE_LIMIT_PER_CLASS = tigerbeetledb.TicketAmount_first_n
-RESERVATION_TTL_SECONDS = 15 # * 60
+RESERVATION_TTL_SECONDS = 5 * 60
 
 SESSION_SECRET = os.environ.get("SESSION_SECRET", "dev-secret-change-me")
 ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")
@@ -194,7 +194,11 @@ async def create_checkout(payload: dict, db: Session = Depends(get_db), client: 
     if cls not in TICKET_CLASSES:
         raise HTTPException(400, detail="invalid ticket class")
 
-    tb_transfer_id, goodie_tb_transfer_id = tigerbeetledb.hold_tickets(client, cls, qty, RESERVATION_TTL_SECONDS)
+    tb_transfer_id, goodie_tb_transfer_id, ticket_ok, goodie_ok = tigerbeetledb.hold_tickets(client, cls, qty, RESERVATION_TTL_SECONDS)
+    if not ticket_ok:
+        raise RuntimeError("Sold Out")
+    if not goodie_ok:
+        goodie_tb_transfer_id = 0
 
     amount = TICKET_CLASSES[cls]["price"] * qty
     order_id = uuid.uuid4().hex
