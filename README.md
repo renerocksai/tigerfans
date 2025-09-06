@@ -17,7 +17,7 @@ The system demonstrates **time-limited holds** (pending transfers) for tickets
 and a **conditional goodie grant**: the ticket is committed on payment success,
 and a goodie is granted if goodies are still available
 
-💡 This demo is not about benchmarking or raw performance. It’s meant to show
+> 💡 This demo is not about benchmarking or raw performance. It’s meant to show
 how TigerBeetle fits into a **realistic booking flow**, rather than just an
 isolated code snippet. It also highlights how tickets and goodies are modeled as
 **TigerBeetle accounts and transfers**, which works very differently from rows
