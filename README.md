@@ -7,7 +7,7 @@ TigerFans is a prototype **ticketing system demo** that shows how
 transactions. It models a fictional **conference booking system** with a payment
 flow:
 
-![doc/](demo.gif)
+![](doc/demo.gif)
 
 - **Checkout** creates an order and places a **time-limited hold**
 - An **external payment step** decides the outcome
