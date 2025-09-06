@@ -3,8 +3,11 @@
 _Resource reservations, atomic commits, and consistency — in one clean demo._
 
 TigerFans is a prototype **ticketing system demo** that shows how
-**[TigerBeetle](https://tigerbeetle.com)** can be applied beyond financial transactions. It models a
-fictional **conference booking system** with a payment flow:
+**[TigerBeetle](https://tigerbeetle.com)** can be applied beyond financial
+transactions. It models a fictional **conference booking system** with a payment
+flow:
+
+![](demo.gif)
 
 - **Checkout** creates an order and places a **time-limited hold**
 - An **external payment step** decides the outcome
