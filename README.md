@@ -1,23 +1,35 @@
 # ⭐ TigerFans
 
-## Run the demo in docker
+_Resource reservations, atomic commits, and consistency — in one clean demo._
 
-_(I tested this on an M3 Mac)_
+TigerFans is a prototype **ticketing system demo** that shows how
+**TigerBeetle** can be applied beyond financial transactions. It models a
+fictional **conference booking system** with a payment flow:
 
-```console
-$ docker-compose up --build
-```
-Wait for the app to start:
+- **Checkout** creates an order and places a **time-limited hold**
+- An **external payment step** decides the outcome
+- A **webhook callback** then **finalizes** or **voids** the order
 
-```
-app-1  | INFO:     Application startup complete.
-```
+The system demonstrates **time-limited holds** (pending transfers) for tickets
+and a **conditional goodie grant**: the ticket is committed on payment success,
+and a goodie is granted if goodies are still available
 
-Then connect your browser to [http://localhost:8000/](http://localhost:8000).
+💡 This demo is not about benchmarking or raw performance. It’s meant to show
+how TigerBeetle fits into a **realistic booking flow**, rather than just an
+isolated code snippet. It also highlights how tickets and goodies are modeled as
+**TigerBeetle accounts and transfers**, which works very differently from rows
+in an SQL table.
 
-To see the last 200 orders, go to
-[http://localhost:8000/admin](http://localhost:8000/admin) and log in with
-username `admin` and password `supasecret`.
+### Features
+
+- **Two ticket classes** (A: Premium, B: Standard), **one ticket per order**.
+- **Time-limited holds** via **pending TigerBeetle transfers**; finalized on
+  payment success or **voided on timeout/failure**.
+- 🎁 **Goodie unlocks**: first 100 paid orders, granted with the ticket.
+- **MockPay** provider with **redirect + webhook** flow (no real payments).
+- **FastAPI** backend; **SQLite** for app state (orders, payments).
+- **Admin dashboard** (basic, protected by HTTP Basic Auth)
+-  **UI pages**: landing, checkout, success incl. QR-code download
 
 ## First-time setup
 
@@ -34,7 +46,7 @@ $ pip install -r requirements.txt
 
 ## Start TigerFans:
 
-### Start Tigerbeetle
+### Start TigerBeetle
 
 ```console
 
@@ -50,6 +62,27 @@ With Tigerbeetle running:
 $ uvicorn tigerfans.server:app --reload --port=8000
 ```
 Connect your browser to [http://localhost:8000/](http://localhost:8000).
+
+To see the last 200 orders, go to
+[http://localhost:8000/admin](http://localhost:8000/admin) and log in with
+username `admin` and password `supasecret`.
+
+
+## Run the demo in docker
+
+> ⚠️ Works on macOS (M3 tested), but not on AWS due to io_uring limitations in
+> Docker.
+
+```console
+$ docker-compose up --build
+```
+Wait for the app to start:
+
+```
+app-1  | INFO:     Application startup complete.
+```
+
+Then connect your browser to [http://localhost:8000/](http://localhost:8000).
 
 To see the last 200 orders, go to
 [http://localhost:8000/admin](http://localhost:8000/admin) and log in with
