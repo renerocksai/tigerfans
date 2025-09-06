@@ -34,7 +34,7 @@ in an SQL table.
 - **Admin dashboard** (basic, protected by HTTP Basic Auth)
 -  **UI pages**: landing, checkout, success incl. QR-code download
 
-**See [doc/tigerbeetle.md](doc/tigerbeetle.md) for more details about how we
+> 📄 **See [doc/tigerbeetle.md](doc/tigerbeetle.md) for more details about how we
 model TigerBeetle accounts and transfers.**
 
 ## First-time setup
