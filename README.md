@@ -7,7 +7,7 @@ TigerFans is a prototype **ticketing system demo** that shows how
 transactions. It models a fictional **conference booking system** with a payment
 flow:
 
-![](demo.gif)
+![doc/](demo.gif)
 
 - **Checkout** creates an order and places a **time-limited hold**
 - An **external payment step** decides the outcome
@@ -33,6 +33,9 @@ in an SQL table.
 - **FastAPI** backend; **SQLite** for app state (orders, payments).
 - **Admin dashboard** (basic, protected by HTTP Basic Auth)
 -  **UI pages**: landing, checkout, success incl. QR-code download
+
+**See [doc/tigerbeetle.md](doc/tigerbeetle.md) for more details about how we
+model TigerBeetle accounts and transfers.**
 
 ## First-time setup
 
