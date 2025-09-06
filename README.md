@@ -1,6 +1,6 @@
 # ⭐ TigerFans
 
-_Resource reservations, atomic commits, and consistency — in one clean demo._
+_Resource reservations, payment flows, and consistency — in one clean demo._
 
 TigerFans is a prototype **ticketing system demo** that shows how
 **[TigerBeetle](https://tigerbeetle.com)** can be applied beyond financial
