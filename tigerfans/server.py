@@ -71,7 +71,7 @@ DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./demo.db")
 
 TICKET_CLASSES = {"A": {"price": 6500}, "B": {"price": 3500}}  # cents (EUR)
 GOODIE_LIMIT_PER_CLASS = tigerbeetledb.TicketAmount_first_n
-RESERVATION_TTL_SECONDS = 15 * 60
+RESERVATION_TTL_SECONDS = 15 # * 60
 
 SESSION_SECRET = os.environ.get("SESSION_SECRET", "dev-secret-change-me")
 ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")
@@ -286,7 +286,7 @@ async def payments_webhook(request: Request, db: Session = Depends(get_db), clie
         gets_ticket, gets_goodie = tigerbeetledb.commit_order(client, order.tb_transfer_id, order.goodie_tb_transfer_id, order.cls, order.qty)
 
         if gets_ticket:
-            # 2) Issue tickets (one code per unit)
+            # 2) Issue tickets
             order.ticket_code = f"TCK-{uuid.uuid4().hex[:10].upper()}"
 
             # 3) Goodie attempt (first 100 per class) — should be atomic in TB in real code
@@ -295,7 +295,16 @@ async def payments_webhook(request: Request, db: Session = Depends(get_db), clie
             # 4) Update order
             order.status = "PAID"
         else:
-            order.status = 'PAID UNFULFILLED'
+            order.status = 'PAID_UNFULFILLED'
+            # We will try to do an immediate transfer before giving up
+            tb_transfer_id, goodie_tb_transfer_id, gets_ticket, gets_goodie = tigerbeetledb.book_immediately(client, order.cls, order.qty)
+            if gets_ticket:
+                order.status = 'PAID'
+                order.tb_transfer_id = str(tb_transfer_id)
+                order.goodie_tb_transfer_id = str(goodie_tb_transfer_id) # just for the record
+                if gets_goodie:
+                    order.got_goodie = True
+                order.ticket_code = f"TCK-{uuid.uuid4().hex[:10].upper()}"
         order.paid_at = now_ts()
         db.add(FulfillmentKey(key=fulfill_key))
         db.commit()

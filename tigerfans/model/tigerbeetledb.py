@@ -138,6 +138,7 @@ def hold_tickets(client: tb.ClientSync, ticket_class: str, qty: int, timeout_sec
             amount=qty,
             ledger=LedgerTickets,
             code=20,
+            timeout=timeout_seconds,
             flags=tb.TransferFlags.PENDING,
         ),
         tb.Transfer(
@@ -147,12 +148,58 @@ def hold_tickets(client: tb.ClientSync, ticket_class: str, qty: int, timeout_sec
             amount=1,
             ledger=LedgerTickets,
             code=20,
+            timeout=timeout_seconds,
             flags=tb.TransferFlags.PENDING,
         ),
     ])
     if transfer_errors:
         raise RuntimeError(transfer_errors)
     return tb_transfer_id, goodie_tb_transfer_id
+
+
+def book_immediately(client: tb.ClientSync, ticket_class: str, qty: int) -> Tuple[str, str, bool, bool]:
+    # we issue 2 transfers: one for the actual tickets and one for the goodie
+    # counter
+    if ticket_class not in ['A', 'B']:
+        raise ValueError("Unknown class " + ticket_class)
+
+    if ticket_class == 'A':
+        debit_account_id = Class_A_budget.id
+        credit_account_id = Class_A_spent.id
+    else:
+        debit_account_id = Class_B_budget.id
+        credit_account_id = Class_B_spent.id
+
+    tb_transfer_id = tb.id()
+    goodie_tb_transfer_id = tb.id()
+
+    transfer_errors = client.create_transfers([
+        tb.Transfer(
+            id=tb_transfer_id,
+            debit_account_id=debit_account_id,
+            credit_account_id=credit_account_id,
+            amount=qty,
+            ledger=LedgerTickets,
+            code=20,
+        ),
+        tb.Transfer(
+            id=goodie_tb_transfer_id,
+            debit_account_id=First_n_budget.id,
+            credit_account_id=First_n_spent.id,
+            amount=1,
+            ledger=LedgerTickets,
+            code=20,
+        ),
+    ])
+    has_ticket = True
+    has_goodie = True
+    print(transfer_errors)
+    for transfer_error in transfer_errors:
+        if transfer_error.index == 0:
+            has_ticket = False
+        if transfer_error.index == 1:
+            has_goodie = False
+    return tb_transfer_id, goodie_tb_transfer_id, has_ticket, has_goodie
 
 
 def commit_order(client: tb.ClientSync, tb_transfer_id: str | int, goodie_tb_transfer_id: str | int, ticket_class: str, qty: int) -> Tuple[bool, bool]:
