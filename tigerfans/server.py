@@ -104,22 +104,22 @@ app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET)
 # tigerbeetle client
 # ---
 @app.on_event("startup")
-def _tb_start():
+async def _tb_start():
     # env or defaults; adjust cluster_id/address as needed
     addr = os.getenv("TB_ADDRESS", "3000")
     cluster_id = int(os.getenv("TB_CLUSTER_ID", "0"))
     # create once per process; keep it on app.state
-    client = tb.ClientSync(cluster_id=cluster_id, replica_addresses=addr)
+    client = tb.ClientAsync(cluster_id=cluster_id, replica_addresses=addr)
     app.state.tb_client = client
-    if tigerbeetledb.create_accounts(client):
-        tigerbeetledb.initial_transfers(client)
+    if await tigerbeetledb.create_accounts(client):
+        await tigerbeetledb.initial_transfers(client)
 
 
 @app.on_event("shutdown")
-def _tb_stop():
+async def _tb_stop():
     client = getattr(app.state, "tb_client", None)
     if client is not None:
-        client.close()
+        await client.close()
         app.state.tb_client = None
 
 
@@ -194,7 +194,7 @@ async def create_checkout(payload: dict, db: Session = Depends(get_db), client: 
     if cls not in TICKET_CLASSES:
         raise HTTPException(400, detail="invalid ticket class")
 
-    tb_transfer_id, goodie_tb_transfer_id, ticket_ok, goodie_ok = tigerbeetledb.hold_tickets(client, cls, qty, RESERVATION_TTL_SECONDS)
+    tb_transfer_id, goodie_tb_transfer_id, ticket_ok, goodie_ok = await tigerbeetledb.hold_tickets(client, cls, qty, RESERVATION_TTL_SECONDS)
     if not ticket_ok:
         raise RuntimeError("Sold Out")
     if not goodie_ok:
@@ -287,7 +287,7 @@ async def payments_webhook(request: Request, db: Session = Depends(get_db), clie
     if kind == "succeeded":
 
         # 1) Commit reservation via TigerBeetle
-        gets_ticket, gets_goodie = tigerbeetledb.commit_order(client, order.tb_transfer_id, order.goodie_tb_transfer_id, order.cls, order.qty)
+        gets_ticket, gets_goodie = await tigerbeetledb.commit_order(client, order.tb_transfer_id, order.goodie_tb_transfer_id, order.cls, order.qty)
 
         if gets_ticket:
             # 2) Issue tickets
@@ -301,7 +301,7 @@ async def payments_webhook(request: Request, db: Session = Depends(get_db), clie
         else:
             order.status = 'PAID_UNFULFILLED'
             # We will try to do an immediate transfer before giving up
-            tb_transfer_id, goodie_tb_transfer_id, gets_ticket, gets_goodie = tigerbeetledb.book_immediately(client, order.cls, order.qty)
+            tb_transfer_id, goodie_tb_transfer_id, gets_ticket, gets_goodie = await tigerbeetledb.book_immediately(client, order.cls, order.qty)
             if gets_ticket:
                 order.status = 'PAID'
                 order.tb_transfer_id = str(tb_transfer_id)
@@ -314,7 +314,7 @@ async def payments_webhook(request: Request, db: Session = Depends(get_db), clie
         db.commit()
 
     elif kind in ("failed", "canceled"):
-        tigerbeetledb.cancel_order(client, order.tb_transfer_id, order.goodie_tb_transfer_id, order.cls, order.qty)
+        await tigerbeetledb.cancel_order(client, order.tb_transfer_id, order.goodie_tb_transfer_id, order.cls, order.qty)
         order.status = "FAILED" if kind == "failed" else "CANCELED"
         db.add(FulfillmentKey(key=fulfill_key))
         db.commit()
@@ -324,7 +324,7 @@ async def payments_webhook(request: Request, db: Session = Depends(get_db), clie
 
 @app.get("/api/inventory")
 async def get_inventory(client: "tb.ClientSync" = Depends(get_tb_client)):
-    return tigerbeetledb.compute_inventory(client)
+    return await tigerbeetledb.compute_inventory(client)
 
 
 # ----------------------------
@@ -469,7 +469,7 @@ async def admin_page(request: Request, db: Session = Depends(get_db), client: "t
             "ticket_code": ticket_code,
             "email": email,
         })
-    goodies_count = tigerbeetledb.count_goodies(client)
+    goodies_count = await tigerbeetledb.count_goodies(client)
     return templates.TemplateResponse(
         "admin.html",
         {

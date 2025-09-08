@@ -46,8 +46,8 @@ Class_B_budget = tb.Account(
 Class_B_spent = tb.Account(id=2229, ledger=LedgerTickets, code=20)
 
 
-def create_accounts(client: tb.ClientSync):
-    account_errors = client.create_accounts([
+async def create_accounts(client: tb.ClientAsync):
+    account_errors = await client.create_accounts([
         First_n_Operator,
         First_n_spent,
         First_n_budget,
@@ -70,8 +70,8 @@ def create_accounts(client: tb.ClientSync):
     return True
 
 
-def initial_transfers(client: tb.ClientSync):
-    transfer_errors = client.create_transfers([
+async def initial_transfers(client: tb.ClientAsync):
+    transfer_errors = await client.create_transfers([
         tb.Transfer(
             id=tb.id(),
             debit_account_id=First_n_Operator.id,
@@ -114,7 +114,7 @@ def initial_transfers(client: tb.ClientSync):
     return
 
 
-def hold_tickets(client: tb.ClientSync, ticket_class: str, qty: int, timeout_seconds=int) -> Tuple[str, str, bool, bool]:
+async def hold_tickets(client: tb.ClientAsync, ticket_class: str, qty: int, timeout_seconds=int) -> Tuple[str, str, bool, bool]:
     # we issue 2 transfers: one for the actual tickets and one for the goodie
     # counter
     if ticket_class not in ['A', 'B']:
@@ -130,7 +130,7 @@ def hold_tickets(client: tb.ClientSync, ticket_class: str, qty: int, timeout_sec
     tb_transfer_id = tb.id()
     goodie_tb_transfer_id = tb.id()
 
-    transfer_errors = client.create_transfers([
+    transfer_errors = await client.create_transfers([
         tb.Transfer(
             id=tb_transfer_id,
             debit_account_id=debit_account_id,
@@ -163,7 +163,7 @@ def hold_tickets(client: tb.ClientSync, ticket_class: str, qty: int, timeout_sec
     return tb_transfer_id, goodie_tb_transfer_id, has_ticket, has_goodie
 
 
-def book_immediately(client: tb.ClientSync, ticket_class: str, qty: int) -> Tuple[str, str, bool, bool]:
+async def book_immediately(client: tb.ClientAsync, ticket_class: str, qty: int) -> Tuple[str, str, bool, bool]:
     # we issue 2 transfers: one for the actual tickets and one for the goodie
     # counter
     if ticket_class not in ['A', 'B']:
@@ -179,7 +179,7 @@ def book_immediately(client: tb.ClientSync, ticket_class: str, qty: int) -> Tupl
     tb_transfer_id = tb.id()
     goodie_tb_transfer_id = tb.id()
 
-    transfer_errors = client.create_transfers([
+    transfer_errors = await client.create_transfers([
         tb.Transfer(
             id=tb_transfer_id,
             debit_account_id=debit_account_id,
@@ -208,7 +208,7 @@ def book_immediately(client: tb.ClientSync, ticket_class: str, qty: int) -> Tupl
     return tb_transfer_id, goodie_tb_transfer_id, has_ticket, has_goodie
 
 
-def commit_order(client: tb.ClientSync, tb_transfer_id: str | int, goodie_tb_transfer_id: str | int, ticket_class: str, qty: int) -> Tuple[bool, bool]:
+async def commit_order(client: tb.ClientAsync, tb_transfer_id: str | int, goodie_tb_transfer_id: str | int, ticket_class: str, qty: int) -> Tuple[bool, bool]:
     if ticket_class not in ['A', 'B']:
         raise ValueError("Unknown class " + ticket_class)
 
@@ -254,7 +254,7 @@ def commit_order(client: tb.ClientSync, tb_transfer_id: str | int, goodie_tb_tra
                 flags=tb.TransferFlags.POST_PENDING_TRANSFER,
             )
         )
-    transfer_errors = client.create_transfers(transfers)
+    transfer_errors = await client.create_transfers(transfers)
 
     has_ticket = True
     has_goodie = goodie_tb_transfer_id > 0
@@ -268,7 +268,7 @@ def commit_order(client: tb.ClientSync, tb_transfer_id: str | int, goodie_tb_tra
     return has_ticket, has_goodie
 
 
-def cancel_order(client: tb.ClientSync, tb_transfer_id: str | int, goodie_tb_transfer_id: str | int, ticket_class: str, qty: int) -> None:
+async def cancel_order(client: tb.ClientAsync, tb_transfer_id: str | int, goodie_tb_transfer_id: str | int, ticket_class: str, qty: int) -> None:
     if ticket_class not in ['A', 'B']:
         raise ValueError("Unknown class " + ticket_class)
 
@@ -287,7 +287,7 @@ def cancel_order(client: tb.ClientSync, tb_transfer_id: str | int, goodie_tb_tra
     id_post = tb.id()
     id_post_goodies = tb.id()
 
-    transfer_errors = client.create_transfers([
+    transfer_errors = await client.create_transfers([
         tb.Transfer(
             id=id_post,
             debit_account_id=debit_account_id,
@@ -316,8 +316,8 @@ def cancel_order(client: tb.ClientSync, tb_transfer_id: str | int, goodie_tb_tra
     return None
 
 
-def compute_inventory(client: tb.ClientSync) -> dict:
-    accounts = client.lookup_accounts([Class_A_spent.id, Class_B_spent.id])
+async def compute_inventory(client: tb.ClientAsync) -> dict:
+    accounts = await client.lookup_accounts([Class_A_spent.id, Class_B_spent.id])
     out = {}
     now = now_ts()
     for ticket_class, account in zip(['A', 'B'], accounts):
@@ -336,8 +336,8 @@ def compute_inventory(client: tb.ClientSync) -> dict:
     return out
 
 
-def count_goodies(client: tb.ClientSync) -> int:
-    accounts = client.lookup_accounts([First_n_spent.id])
+async def count_goodies(client: tb.ClientAsync) -> int:
+    accounts = await client.lookup_accounts([First_n_spent.id])
     return accounts[0].credits_posted
 
 
