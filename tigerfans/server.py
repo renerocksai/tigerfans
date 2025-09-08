@@ -42,7 +42,7 @@ from fastapi.templating import Jinja2Templates
 
 from .model import tigerbeetledb
 
-from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.status import HTTP_303_SEE_OTHER
@@ -51,7 +51,7 @@ from sqlalchemy import (
     text,
 )
 from .model.db import (
-    Order, PaymentSession, WebhookEventSeen, FulfillmentKey, make_engine
+    Base, Order, PaymentSession, WebhookEventSeen, FulfillmentKey, make_async_engine
 )
 from .helpers import now_ts, to_iso, is_valid_email, ct_equal
 from .mockpay import PaymentAdapter, MockPay, MOCK_SECRET
@@ -81,10 +81,12 @@ ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "supasecret")
 # ----------------------------
 # Database setup (SQLite)
 # ----------------------------
-engine = make_engine(DATABASE_URL)
-SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False,
-                            future=True)
+engine, SessionAsync = make_async_engine(DATABASE_URL)
 
+
+async def get_db() -> AsyncSession:
+    async with SessionAsync() as session:
+        yield session
 
 
 
@@ -101,7 +103,7 @@ app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET)
 
 
 # ---
-# tigerbeetle client
+# startup / shutdown
 # ---
 @app.on_event("startup")
 async def _tb_start():
@@ -115,6 +117,12 @@ async def _tb_start():
         await tigerbeetledb.initial_transfers(client)
 
 
+@app.on_event("startup")
+async def init_db():
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+
 @app.on_event("shutdown")
 async def _tb_stop():
     client = getattr(app.state, "tb_client", None)
@@ -126,14 +134,6 @@ async def _tb_stop():
 # ----------------------------
 # Helpers
 # ----------------------------
-def get_db() -> Session:
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-
 def get_tb_client() -> "tb.ClientSync":
     client = getattr(app.state, "tb_client", None)
     if client is None:
@@ -182,7 +182,7 @@ async def demo_checkout_page(request: Request, status: Optional[str] = None, ord
 
 
 @app.post("/api/checkout")
-async def create_checkout(payload: dict, db: Session = Depends(get_db), client: "tb.ClientSync" = Depends(get_tb_client)):
+async def create_checkout(payload: dict, db: SessionAsync = Depends(get_db), client: "tb.ClientSync" = Depends(get_tb_client)):
     cls = payload.get("cls")
     # Enforce single-ticket policy
     qty = 1
@@ -215,11 +215,11 @@ async def create_checkout(payload: dict, db: Session = Depends(get_db), client: 
         status="PENDING",
     )
     db.add(order)
-    db.commit()
+    await db.commit()
 
-    session = adapter.create_session(db, order, meta={"order_id": order_id})
+    session = await adapter.create_session(db, order, meta={"order_id": order_id})
     order.payment_session_id = session["payment_session_id"]
-    db.commit()
+    await db.commit()
 
     return {
         "order_id": order_id,
@@ -233,8 +233,8 @@ async def create_checkout(payload: dict, db: Session = Depends(get_db), client: 
 # API: Order status (polled by success page)
 # ----------------------------
 @app.get("/api/orders/{order_id}")
-async def get_order(order_id: str, db: Session = Depends(get_db)):
-    order = db.get(Order, order_id)
+async def get_order(order_id: str, db: SessionAsync = Depends(get_db)):
+    order = await db.get(Order, order_id)
     if not order:
         raise HTTPException(404, detail="order not found")
     ticket_code = order.ticket_code or ""
@@ -255,7 +255,7 @@ async def get_order(order_id: str, db: Session = Depends(get_db)):
 # Webhook endpoint (shared for Mock/Stripe)
 # ----------------------------
 @app.post("/payments/webhook")
-async def payments_webhook(request: Request, db: Session = Depends(get_db), client: "tb.ClientSync" = Depends(get_tb_client)):
+async def payments_webhook(request: Request, db: SessionAsync = Depends(get_db), client: "tb.ClientSync" = Depends(get_tb_client)):
     payload = await request.body()
     headers = dict(request.headers)
 
@@ -267,21 +267,21 @@ async def payments_webhook(request: Request, db: Session = Depends(get_db), clie
 
     # Event-level idempotency
     if idem:
-        if db.get(WebhookEventSeen, idem):
+        if await db.get(WebhookEventSeen, idem):
             return {"ok": True, "idempotent": True}
         db.add(WebhookEventSeen(idempotency_key=idem))
-        db.commit()
+        await db.commit()
 
-    session = db.get(PaymentSession, psid)
+    session = await db.get(PaymentSession, psid)
     if not session:
         raise HTTPException(404, detail="payment session not found")
-    order = db.get(Order, session.order_id)
+    order = await db.get(Order, session.order_id)
     if not order:
         raise HTTPException(404, detail="order not found")
 
     # Fulfillment idempotency
     fulfill_key = f"{order.id}:{psid}"
-    if db.get(FulfillmentKey, fulfill_key):
+    if await db.get(FulfillmentKey, fulfill_key):
         return {"ok": True, "idempotent": True}
 
     if kind == "succeeded":
@@ -311,13 +311,13 @@ async def payments_webhook(request: Request, db: Session = Depends(get_db), clie
                 order.ticket_code = f"TCK-{uuid.uuid4().hex[:10].upper()}"
         order.paid_at = now_ts()
         db.add(FulfillmentKey(key=fulfill_key))
-        db.commit()
+        await db.commit()
 
     elif kind in ("failed", "canceled"):
         await tigerbeetledb.cancel_order(client, order.tb_transfer_id, order.goodie_tb_transfer_id, order.cls, order.qty)
         order.status = "FAILED" if kind == "failed" else "CANCELED"
         db.add(FulfillmentKey(key=fulfill_key))
-        db.commit()
+        await db.commit()
 
     return {"ok": True, "order_status": order.status}
 
@@ -332,11 +332,11 @@ async def get_inventory(client: "tb.ClientSync" = Depends(get_tb_client)):
 # ----------------------------
 # MockPay
 @app.get("/mockpay/{psid}", response_class=HTMLResponse)
-async def mockpay_screen(request: Request, psid: str, db: Session = Depends(get_db)):
-    session = db.get(PaymentSession, psid)
+async def mockpay_screen(request: Request, psid: str, db: SessionAsync = Depends(get_db)):
+    session = await db.get(PaymentSession, psid)
     if not session:
         raise HTTPException(404, detail="payment session not found")
-    order = db.get(Order, session.order_id)
+    order = await db.get(Order, session.order_id)
     return templates.TemplateResponse(
         "mockpay.html",
         {
@@ -352,13 +352,13 @@ async def mockpay_screen(request: Request, psid: str, db: Session = Depends(get_
 
 
 @app.post("/mockpay/{psid}/emit")
-async def mockpay_emit(psid: str, request: Request, db: Session = Depends(get_db)):
+async def mockpay_emit(psid: str, request: Request, db: SessionAsync = Depends(get_db)):
     form = await request.form()
     kind = form.get("t")  # succeeded|failed|canceled
     if kind not in {"succeeded", "failed", "canceled"}:
         raise HTTPException(400, detail="invalid kind")
 
-    session = db.get(PaymentSession, psid)
+    session = await db.get(PaymentSession, psid)
     if not session:
         raise HTTPException(404, detail="payment session not found")
 
@@ -402,8 +402,8 @@ async def mockpay_emit(psid: str, request: Request, db: Session = Depends(get_db
 # ----------------------------
 # Success page
 @app.get("/demo/success", response_class=HTMLResponse)
-async def demo_success_page(request: Request, order_id: str, db: Session = Depends(get_db)):
-    order = db.get(Order, order_id)
+async def demo_success_page(request: Request, order_id: str, db: SessionAsync = Depends(get_db)):
+    order = await db.get(Order, order_id)
     if not order:
         raise HTTPException(404, detail="order not found")
     return templates.TemplateResponse("success.html", {"request": request, "order_id": order_id})
@@ -446,14 +446,15 @@ async def admin_logout(request: Request):
 
 # Admin page
 @app.get("/admin", response_class=HTMLResponse)
-async def admin_page(request: Request, db: Session = Depends(get_db), client: "tb.ClientSync" = Depends(get_tb_client)):
+async def admin_page(request: Request, db: SessionAsync = Depends(get_db), client: "tb.ClientSync" = Depends(get_tb_client)):
     if not is_admin(request):
         dest = request.url.path
         return RedirectResponse(url=f"/admin/login?next={dest}", status_code=307)
 
-    rows = db.execute(
+    result = await db.execute(
         text("SELECT id, status, cls, qty, amount, currency, paid_at, got_goodie, ticket_code, customer_email FROM orders ORDER BY created_at DESC LIMIT 200")
-    ).all()
+    )
+    rows = result.all()
     orders = []
     for (oid, status, cls, qty, amount, currency, paid_at, got_goodie, ticket_code, email) in rows:
         paid_iso = '-' if paid_at is None else datetime.fromtimestamp(paid_at, tz=timezone.utc).isoformat()

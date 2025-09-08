@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional, Tuple, TypedDict
 from fastapi import HTTPException
 import os
@@ -24,7 +24,7 @@ class CreateSessionResult(TypedDict):
 
 class PaymentAdapter(ABC):
     @abstractmethod
-    def create_session(self, db: Session, order: Order, meta: dict) -> CreateSessionResult: ...
+    def create_session(self, db: AsyncSession, order: Order, meta: dict) -> CreateSessionResult: ...
 
     @abstractmethod
     def verify_webhook(self, payload: bytes, headers: dict) -> dict: ...
@@ -42,7 +42,7 @@ class PaymentAdapter(ABC):
 # MockPay implementation
 # ----------------------------
 class MockPay(PaymentAdapter):
-    def create_session(self, db: Session, order: Order, meta: dict) -> CreateSessionResult:
+    async def create_session(self, db: AsyncSession, order: Order, meta: dict) -> CreateSessionResult:
         psid = f"mock_{uuid.uuid4().hex}"
         db.add(PaymentSession(
             id=psid,
@@ -51,7 +51,7 @@ class MockPay(PaymentAdapter):
             currency=order.currency,
             created_at=now_ts(),
         ))
-        db.commit()
+        await db.commit()
         redirect_url = f"/mockpay/{psid}"
         return {"payment_session_id": psid, "redirect_url": redirect_url}
 

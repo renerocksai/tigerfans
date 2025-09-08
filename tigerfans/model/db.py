@@ -10,6 +10,7 @@ from sqlalchemy import (
     event,
     # text,
 )
+from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 
 
 Base = declarative_base()
@@ -62,25 +63,52 @@ class FulfillmentKey(Base):
     key = Column(String, primary_key=True)  # order_id:session_id
 
 
-def make_engine(DATABASE_URL):
-    engine = create_engine(
-        DATABASE_URL,
-        future=True,
-        connect_args={
-            "check_same_thread": False
-        } if DATABASE_URL.startswith("sqlite") else {},
-        pool_pre_ping=True,
+# def make_engine(DATABASE_URL):
+#     engine = create_engine(
+#         DATABASE_URL,
+#         future=True,
+#         connect_args={
+#             "check_same_thread": False
+#         } if DATABASE_URL.startswith("sqlite") else {},
+#         pool_pre_ping=True,
+#     )
+#
+#     # Enable WAL + busy timeout for SQLite
+#     if DATABASE_URL.startswith("sqlite"):
+#         @event.listens_for(engine, "connect")
+#         def sqlite_pragmas(dbapi_connection, connection_record):
+#             cursor = dbapi_connection.cursor()
+#             cursor.execute("PRAGMA journal_mode=WAL;")
+#             cursor.execute("PRAGMA busy_timeout=5000;")
+#             cursor.execute("PRAGMA synchronous=NORMAL;")
+#             cursor.close()
+#
+#     Base.metadata.create_all(bind=engine)
+#     return engine
+
+
+def make_async_engine(database_url: str):
+    # swap to aiosqlite
+    if database_url.startswith("sqlite://"):
+        database_url = database_url.replace("sqlite://", "sqlite+aiosqlite://", 1)
+
+    engine = create_async_engine(database_url, future=True, pool_pre_ping=True)
+
+    # SQLite PRAGMAs (attach to the sync_engine behind the async engine)
+    if database_url.startswith("sqlite+aiosqlite://"):
+        @event.listens_for(engine.sync_engine, "connect")
+        def _sqlite_pragmas(dbapi_connection, _):
+            cur = dbapi_connection.cursor()
+            cur.execute("PRAGMA journal_mode=WAL;")
+            cur.execute("PRAGMA busy_timeout=5000;")
+            cur.execute("PRAGMA synchronous=NORMAL;")
+            cur.close()
+
+    SessionAsync = async_sessionmaker(
+        engine,
+        class_=AsyncSession,
+        expire_on_commit=False,  # avoid objects expiring after commit
+        autoflush=False,         # keep flush manual
     )
 
-    # Enable WAL + busy timeout for SQLite
-    if DATABASE_URL.startswith("sqlite"):
-        @event.listens_for(engine, "connect")
-        def sqlite_pragmas(dbapi_connection, connection_record):
-            cursor = dbapi_connection.cursor()
-            cursor.execute("PRAGMA journal_mode=WAL;")
-            cursor.execute("PRAGMA busy_timeout=5000;")
-            cursor.execute("PRAGMA synchronous=NORMAL;")
-            cursor.close()
-
-    Base.metadata.create_all(bind=engine)
-    return engine
+    return engine, SessionAsync
