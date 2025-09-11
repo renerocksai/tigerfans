@@ -12,10 +12,10 @@ server:
 	uvicorn tigerfans.server:app --reload --workers=1
 
 server-w2:
-	uvicorn tigerfans.server:app --reload --workers=2
+	 DATABASE_URL="postgresql+asyncpg://postgres:devpass@127.0.0.1:5432/tigerfans" uvicorn tigerfans.server:app --reload --workers=2
 
 psql:
-	docker run -d --name pg \
+	sudo docker run -d --name pg \
 	  -e POSTGRES_PASSWORD=devpass \
 	  -e POSTGRES_DB=tigerfans \
 	  -p 5432:5432 \
