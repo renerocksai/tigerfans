@@ -197,7 +197,6 @@ async def book_immediately(client: tb.ClientAsync, ticket_class: str, qty: int) 
     ])
     has_ticket = True
     has_goodie = True
-    print(transfer_errors)
     for transfer_error in transfer_errors:
         if transfer_error.index == 0:
             has_ticket = False
@@ -256,7 +255,6 @@ async def commit_order(client: tb.ClientAsync, tb_transfer_id: str | int, goodie
 
     has_ticket = True
     has_goodie = try_goodie
-    print(transfer_errors)
     for transfer_error in transfer_errors:
         if transfer_error.index == 0:
             has_ticket = False
