@@ -34,7 +34,7 @@ from typing import Optional
 
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, ORJSONResponse
 from fastapi import Form
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -49,6 +49,8 @@ from starlette.status import HTTP_303_SEE_OTHER
 
 from sqlalchemy import (
     text,
+    select,
+    join,
 )
 from sqlalchemy.exc import IntegrityError
 from .model.db import (
@@ -98,7 +100,11 @@ adapter: PaymentAdapter = MockPay()
 # ----------------------------
 # FastAPI app
 # ----------------------------
-app = FastAPI(title="Ticketing Demo with MockPay & TigerBeetle stubs (SQLite)")
+
+app = FastAPI(
+    title="Ticketing Demo with MockPay & TigerBeetle (SQLite/PostgreSQL)",
+    default_response_class=ORJSONResponse,
+)
 app.mount("/static", StaticFiles(directory="tigerfans/static"), name="static")
 app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET)
 
@@ -126,7 +132,10 @@ async def init_db():
 
 @app.on_event("startup")
 async def _http_client_start():
-    app.state.http = httpx.AsyncClient(timeout=5.0)
+    app.state.http = httpx.AsyncClient(
+        timeout=5.0,
+        limits=httpx.Limits(max_connections=128, max_keepalive_connections=128)
+    )
 
 
 @app.on_event("shutdown")
@@ -297,20 +306,44 @@ async def payments_webhook(
     psid, idem = adapter.event_ids(event)
     if not psid:
         raise HTTPException(400, detail="missing payment_session_id")
+    ######
+    # Variant 1
+    ######
+    # # look up session + order (reads)
+    # session = await db.get(PaymentSession, psid)
+    # if not session:
+    #     raise HTTPException(404, detail="payment session not found")
+    # order = await db.get(Order, session.order_id)
+    # if not order:
+    #     raise HTTPException(404, detail="order not found")
+    #
+    # # Try to short-circuit idempotency **without a transaction** (optional read).
+    # # We **could** remove this read: inserts below are guarded anyway.
+    # fulfill_key = f"{order.id}:{psid}"
+    # if await db.get(FulfillmentKey, fulfill_key):
+    #     return {"ok": True, "idempotent": True}
+    ######
 
-    # look up session + order (reads)
-    session = await db.get(PaymentSession, psid)
-    if not session:
-        raise HTTPException(404, detail="payment session not found")
-    order = await db.get(Order, session.order_id)
+    ######
+    # Variant 2
+    ######
+    # one round-trip: PaymentSession -> Order
+    result = await db.execute(
+        select(Order).select_from(
+            join(PaymentSession, Order, PaymentSession.order_id == Order.id)
+        ).where(PaymentSession.id == psid)
+    )
+    order = result.scalars().first()
     if not order:
-        raise HTTPException(404, detail="order not found")
+        # either the payment session doesn't exist or it doesn't link to an order
+        raise HTTPException(404, detail="order not found for payment_session_id")
 
-    # Try to short-circuit idempotency **without a transaction** (optional read).
-    # We **could** remove this read: inserts below are guarded anyway.
+    # Optional early idempotency short-circuit (kept same behavior)
     fulfill_key = f"{order.id}:{psid}"
     if await db.get(FulfillmentKey, fulfill_key):
         return {"ok": True, "idempotent": True}
+    #
+    ######
 
     # --- Do provider-side work first (TB), without holding a DB tx ---
     if kind == "succeeded":
