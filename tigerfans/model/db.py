@@ -1,3 +1,4 @@
+import os
 from sqlalchemy.orm import declarative_base
 from sqlalchemy import (
     Column,
@@ -64,38 +65,34 @@ class FulfillmentKey(Base):
     key = Column(String, primary_key=True)  # order_id:session_id
 
 
-# def make_engine(DATABASE_URL):
-#     engine = create_engine(
-#         DATABASE_URL,
-#         future=True,
-#         connect_args={
-#             "check_same_thread": False
-#         } if DATABASE_URL.startswith("sqlite") else {},
-#         pool_pre_ping=True,
-#     )
-#
-#     # Enable WAL + busy timeout for SQLite
-#     if DATABASE_URL.startswith("sqlite"):
-#         @event.listens_for(engine, "connect")
-#         def sqlite_pragmas(dbapi_connection, connection_record):
-#             cursor = dbapi_connection.cursor()
-#             cursor.execute("PRAGMA journal_mode=WAL;")
-#             cursor.execute("PRAGMA busy_timeout=5000;")
-#             cursor.execute("PRAGMA synchronous=NORMAL;")
-#             cursor.close()
-#
-#     Base.metadata.create_all(bind=engine)
-#     return engine
+def _normalize_async_url(url: str) -> str:
+    # SQLite -> aiosqlite
+    if url.startswith("sqlite://"):
+        return url.replace("sqlite://", "sqlite+aiosqlite://", 1)
+    # Postgres common forms -> asyncpg
+    if url.startswith("postgresql://"):
+        return url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    if url.startswith("postgres://"):
+        # allow Heroku-style URLs
+        return url.replace("postgres://", "postgresql+asyncpg://", 1)
+    return url  # leave others untouched
 
 
 def make_async_engine(database_url: str):
-    # swap to aiosqlite
-    if database_url.startswith("sqlite://"):
-        database_url = database_url.replace("sqlite://", "sqlite+aiosqlite://", 1)
+    db_url = _normalize_async_url(database_url)
 
-    engine = create_async_engine(database_url, future=True, pool_pre_ping=True)
+    kw = dict(future=True, pool_pre_ping=True)
 
-    # SQLite PRAGMAs (attach to the sync_engine behind the async engine)
+    if db_url.startswith("postgresql+asyncpg://"):
+        kw.update(
+            pool_size=int(os.getenv("DB_POOL_SIZE", "5")),
+            max_overflow=int(os.getenv("DB_MAX_OVERFLOW", "5")),
+            pool_timeout=int(os.getenv("DB_POOL_TIMEOUT", "30")),
+        )
+
+    engine = create_async_engine(db_url, **kw)
+
+    # Apply SQLite PRAGMAs (via the sync_engine behind the async engine)
     if database_url.startswith("sqlite+aiosqlite://"):
         @event.listens_for(engine.sync_engine, "connect")
         def _sqlite_pragmas(dbapi_connection, _):
@@ -108,8 +105,7 @@ def make_async_engine(database_url: str):
     SessionAsync = async_sessionmaker(
         engine,
         class_=AsyncSession,
-        expire_on_commit=False,  # avoid objects expiring after commit
-        autoflush=False,         # keep flush manual
+        expire_on_commit=False,
+        autoflush=False,
     )
-
     return engine, SessionAsync

@@ -200,25 +200,41 @@ async def create_checkout(payload: dict, db: SessionAsync = Depends(get_db), cli
 
     amount = TICKET_CLASSES[cls]["price"] * qty
     order_id = uuid.uuid4().hex
-    order = Order(
-        id=order_id,
-        tb_transfer_id=str(tb_transfer_id),
-        goodie_tb_transfer_id=str(goodie_tb_transfer_id),
-        try_goodie=goodie_ok,
-        cls=cls,
-        qty=qty,
-        amount=amount,
-        currency="eur",
-        customer_email=customer_email,
-        created_at=now_ts(),
-        status="PENDING",
-    )
-    db.add(order)
-    await db.commit()
 
-    session = await adapter.create_session(db, order, meta={"order_id": order_id})
-    order.payment_session_id = session["payment_session_id"]
-    await db.commit()
+    async with db.begin():
+        order = Order(
+            id=order_id,
+            tb_transfer_id=str(tb_transfer_id),
+            goodie_tb_transfer_id=str(goodie_tb_transfer_id),
+            try_goodie=goodie_ok,
+            cls=cls,
+            qty=qty,
+            amount=amount,
+            currency="eur",
+            customer_email=customer_email,
+            created_at=now_ts(),
+            status="PENDING",
+        )
+        db.add(order)
+        # await db.commit()
+
+        # don't create the session in the adapter anymore, we create it in this
+        # transaction instead.
+        # session = await adapter.create_session(db, order, meta={"order_id": order_id})
+        # await db.commit()
+
+        session = adapter.create_session_id_and_url(order)
+
+        payment_session = PaymentSession(
+            id=session["payment_session_id"],
+            order_id=order.id,
+            amount=order.amount,
+            currency=order.currency,
+            created_at=now_ts(),
+        )
+        order.payment_session_id = session["payment_session_id"]
+        db.add(payment_session)
+
 
     return {
         "order_id": order_id,

@@ -26,6 +26,10 @@ class PaymentAdapter(ABC):
     @abstractmethod
     def create_session(self, db: AsyncSession, order: Order, meta: dict) -> CreateSessionResult: ...
 
+    # this is to take a shortcut and commit in the endpoint
+    @abstractmethod
+    def create_session_id_and_url(self, order: Order) -> CreateSessionResult: ...
+
     @abstractmethod
     def verify_webhook(self, payload: bytes, headers: dict) -> dict: ...
 
@@ -42,6 +46,9 @@ class PaymentAdapter(ABC):
 # MockPay implementation
 # ----------------------------
 class MockPay(PaymentAdapter):
+
+    # we don't use that anymore. to save one DB commit, create the session in
+    # the endpoint
     async def create_session(self, db: AsyncSession, order: Order, meta: dict) -> CreateSessionResult:
         psid = f"mock_{uuid.uuid4().hex}"
         db.add(PaymentSession(
@@ -52,6 +59,12 @@ class MockPay(PaymentAdapter):
             created_at=now_ts(),
         ))
         await db.commit()
+        redirect_url = f"/mockpay/{psid}"
+        return {"payment_session_id": psid, "redirect_url": redirect_url}
+
+    # we use that instead
+    def create_session_id_and_url(self, order: Order) -> CreateSessionResult:
+        psid = f"mock_{uuid.uuid4().hex}"
         redirect_url = f"/mockpay/{psid}"
         return {"payment_session_id": psid, "redirect_url": redirect_url}
 
