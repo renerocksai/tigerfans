@@ -35,7 +35,11 @@
             </div>
             <div class="p-4 squircle bg-slate-900 border border-white/10">
               <p class="text-xs text-slate-400">orders database</p>
+              {% if db == 'sqlite' %}
               <p class="text-2xl font-bold"><a href="https://sqlite.org" target="_blank">SQLite</a></p>
+              {% else %}
+              <p class="text-2xl font-bold"><a href="https://www.postgresql.org/" target="_blank">PostgreSQL</a></p>
+              {% endif %}
             </div>
             <div class="p-4 squircle bg-slate-900 border border-white/10">
               <p class="text-xs text-slate-400">payment provider</p>

@@ -71,6 +71,7 @@ MOCK_WEBHOOK_URL = os.environ.get(
     "http://localhost:8000/payments/webhook"
 )
 DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./demo.db")
+DB_KIND = "postgres" if DATABASE_URL.startswith("postgres") else "sqlite"
 
 TICKET_CLASSES = {"A": {"price": 6500}, "B": {"price": 3500}}  # cents (EUR)
 GOODIE_LIMIT_PER_CLASS = tigerbeetledb.TicketAmount_first_n
@@ -189,6 +190,7 @@ async def landing_page(request: Request):
             "site_name": "TigerFans",
             "conf_date": "Dec 3–4, 2025",
             "conf_tagline": "A conference for people who love fast, correct systems.",
+            "db": DB_KIND,
         },
     )
 
