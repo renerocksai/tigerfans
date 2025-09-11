@@ -163,9 +163,10 @@
         body: JSON.stringify({ cls: data.cls, customer_email: data.customer_email.trim() })
       });
 
-      const elapsed = Date.now() - start;
-      const minDelay = 300;
-      if (elapsed < minDelay) await new Promise(r => setTimeout(r, minDelay - elapsed));
+      // -- disabled the artificial delay
+      // const elapsed = Date.now() - start;
+      // const minDelay = 300;
+      // if (elapsed < minDelay) await new Promise(r => setTimeout(r, minDelay - elapsed));
 
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
