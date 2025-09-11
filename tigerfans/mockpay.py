@@ -28,7 +28,7 @@ class PaymentAdapter(ABC):
 
     # this is to take a shortcut and commit in the endpoint
     @abstractmethod
-    def create_session_id_and_url(self, order: Order) -> CreateSessionResult: ...
+    def create_session_id_and_url(self) -> CreateSessionResult: ...
 
     @abstractmethod
     def verify_webhook(self, payload: bytes, headers: dict) -> dict: ...
@@ -63,7 +63,7 @@ class MockPay(PaymentAdapter):
         return {"payment_session_id": psid, "redirect_url": redirect_url}
 
     # we use that instead
-    def create_session_id_and_url(self, order: Order) -> CreateSessionResult:
+    def create_session_id_and_url(self) -> CreateSessionResult:
         psid = f"mock_{uuid.uuid4().hex}"
         redirect_url = f"/mockpay/{psid}"
         return {"payment_session_id": psid, "redirect_url": redirect_url}
