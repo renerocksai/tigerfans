@@ -4,11 +4,9 @@ from typing import Tuple
 from ..helpers import now_ts, to_iso
 
 # Config
-TicketAmount_Class_A = 100
-TicketAmount_Class_B = 500
-TicketAmount_first_n = 100
-
-RestartCounter_max = 1_000_000
+TicketAmount_Class_A = 5_000_000
+TicketAmount_Class_B = 5_000_000
+TicketAmount_first_n = 100_000
 
 LedgerTickets = 2000
 
@@ -208,7 +206,7 @@ async def book_immediately(client: tb.ClientAsync, ticket_class: str, qty: int) 
     return tb_transfer_id, goodie_tb_transfer_id, has_ticket, has_goodie
 
 
-async def commit_order(client: tb.ClientAsync, tb_transfer_id: str | int, goodie_tb_transfer_id: str | int, ticket_class: str, qty: int) -> Tuple[bool, bool]:
+async def commit_order(client: tb.ClientAsync, tb_transfer_id: str | int, goodie_tb_transfer_id: str | int, ticket_class: str, qty: int, try_goodie: bool) -> Tuple[bool, bool]:
     if ticket_class not in ['A', 'B']:
         raise ValueError("Unknown class " + ticket_class)
 
@@ -241,7 +239,7 @@ async def commit_order(client: tb.ClientAsync, tb_transfer_id: str | int, goodie
     ]
 
     # only commit goodie if it hasn't failed before
-    if goodie_tb_transfer_id > 0:
+    if try_goodie:
         transfers.append(
             tb.Transfer(
                 id=id_post_goodies,
@@ -257,7 +255,7 @@ async def commit_order(client: tb.ClientAsync, tb_transfer_id: str | int, goodie
     transfer_errors = await client.create_transfers(transfers)
 
     has_ticket = True
-    has_goodie = goodie_tb_transfer_id > 0
+    has_goodie = try_goodie
     print(transfer_errors)
     for transfer_error in transfer_errors:
         if transfer_error.index == 0:

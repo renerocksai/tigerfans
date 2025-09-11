@@ -24,6 +24,7 @@ class Order(Base):
     id = Column(String, primary_key=True)
     tb_transfer_id = Column(String, nullable=False, unique=True)
     goodie_tb_transfer_id = Column(String, nullable=False, unique=True)
+    try_goodie = Column(Boolean, nullable=False)
     cls = Column(String, nullable=False)
     qty = Column(Integer, nullable=False)
     amount = Column(Integer, nullable=False)  # cents

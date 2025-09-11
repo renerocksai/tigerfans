@@ -197,15 +197,14 @@ async def create_checkout(payload: dict, db: SessionAsync = Depends(get_db), cli
     tb_transfer_id, goodie_tb_transfer_id, ticket_ok, goodie_ok = await tigerbeetledb.hold_tickets(client, cls, qty, RESERVATION_TTL_SECONDS)
     if not ticket_ok:
         raise RuntimeError("Sold Out")
-    if not goodie_ok:
-        goodie_tb_transfer_id = 0
 
     amount = TICKET_CLASSES[cls]["price"] * qty
     order_id = uuid.uuid4().hex
     order = Order(
         id=order_id,
-        tb_transfer_id = str(tb_transfer_id),
-        goodie_tb_transfer_id = str(goodie_tb_transfer_id),
+        tb_transfer_id=str(tb_transfer_id),
+        goodie_tb_transfer_id=str(goodie_tb_transfer_id),
+        try_goodie=goodie_ok,
         cls=cls,
         qty=qty,
         amount=amount,
@@ -287,7 +286,7 @@ async def payments_webhook(request: Request, db: SessionAsync = Depends(get_db),
     if kind == "succeeded":
 
         # 1) Commit reservation via TigerBeetle
-        gets_ticket, gets_goodie = await tigerbeetledb.commit_order(client, order.tb_transfer_id, order.goodie_tb_transfer_id, order.cls, order.qty)
+        gets_ticket, gets_goodie = await tigerbeetledb.commit_order(client, order.tb_transfer_id, order.goodie_tb_transfer_id, order.cls, order.qty, order.try_goodie)
 
         if gets_ticket:
             # 2) Issue tickets
