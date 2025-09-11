@@ -50,6 +50,7 @@ from starlette.status import HTTP_303_SEE_OTHER
 from sqlalchemy import (
     text,
 )
+from sqlalchemy.exc import IntegrityError
 from .model.db import (
     Base, Order, PaymentSession, WebhookEventSeen, FulfillmentKey, make_async_engine
 )
@@ -121,6 +122,19 @@ async def _tb_start():
 async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+
+@app.on_event("startup")
+async def _http_client_start():
+    app.state.http = httpx.AsyncClient(timeout=5.0)
+
+
+@app.on_event("shutdown")
+async def _http_client_stop():
+    http = getattr(app.state, "http", None)
+    if http is not None:
+        await http.aclose()
+        app.state.http = None
 
 
 @app.on_event("shutdown")
@@ -242,20 +256,27 @@ async def create_checkout(payload: dict, db: SessionAsync = Depends(get_db), cli
 # ----------------------------
 @app.get("/api/orders/{order_id}")
 async def get_order(order_id: str, db: SessionAsync = Depends(get_db)):
-    order = await db.get(Order, order_id)
-    if not order:
+    # raw sql -> sqlalchemy won't start an implicit transaction
+    result = await db.execute(
+        text("""
+            SELECT id, status, cls, qty, amount, currency, paid_at, ticket_code, got_goodie
+            FROM orders WHERE id = :id
+        """),
+        {"id": order_id},
+    )
+    row = result.mappings().first()
+    if not row:
         raise HTTPException(404, detail="order not found")
-    ticket_code = order.ticket_code or ""
     return {
-        "order_id": order.id,
-        "status": order.status,
-        "cls": order.cls,
-        "qty": order.qty,
-        "amount": order.amount,
-        "currency": order.currency,
-        "paid_at": to_iso(order.paid_at),
-        "ticket_code": ticket_code,
-        "got_goodie": order.got_goodie,
+        "order_id": row["id"],
+        "status": row["status"],
+        "cls": row["cls"],
+        "qty": row["qty"],
+        "amount": row["amount"],
+        "currency": row["currency"],
+        "paid_at": to_iso(row["paid_at"]),
+        "ticket_code": row["ticket_code"] or "",
+        "got_goodie": row["got_goodie"],
     }
 
 
@@ -263,7 +284,11 @@ async def get_order(order_id: str, db: SessionAsync = Depends(get_db)):
 # Webhook endpoint (shared for Mock/Stripe)
 # ----------------------------
 @app.post("/payments/webhook")
-async def payments_webhook(request: Request, db: SessionAsync = Depends(get_db), client: "tb.ClientSync" = Depends(get_tb_client)):
+async def payments_webhook(
+    request: Request,
+    db: SessionAsync = Depends(get_db),
+    client: "tb.ClientSync" = Depends(get_tb_client),
+):
     payload = await request.body()
     headers = dict(request.headers)
 
@@ -273,13 +298,7 @@ async def payments_webhook(request: Request, db: SessionAsync = Depends(get_db),
     if not psid:
         raise HTTPException(400, detail="missing payment_session_id")
 
-    # Event-level idempotency
-    if idem:
-        if await db.get(WebhookEventSeen, idem):
-            return {"ok": True, "idempotent": True}
-        db.add(WebhookEventSeen(idempotency_key=idem))
-        await db.commit()
-
+    # look up session + order (reads)
     session = await db.get(PaymentSession, psid)
     if not session:
         raise HTTPException(404, detail="payment session not found")
@@ -287,47 +306,73 @@ async def payments_webhook(request: Request, db: SessionAsync = Depends(get_db),
     if not order:
         raise HTTPException(404, detail="order not found")
 
-    # Fulfillment idempotency
+    # Try to short-circuit idempotency **without a transaction** (optional read).
+    # We **could** remove this read: inserts below are guarded anyway.
     fulfill_key = f"{order.id}:{psid}"
     if await db.get(FulfillmentKey, fulfill_key):
         return {"ok": True, "idempotent": True}
 
+    # --- Do provider-side work first (TB), without holding a DB tx ---
     if kind == "succeeded":
+        gets_ticket, gets_goodie = await tigerbeetledb.commit_order(
+            client,
+            order.tb_transfer_id,
+            order.goodie_tb_transfer_id,
+            order.cls,
+            order.qty,
+            order.try_goodie,
+        )
 
-        # 1) Commit reservation via TigerBeetle
-        gets_ticket, gets_goodie = await tigerbeetledb.commit_order(client, order.tb_transfer_id, order.goodie_tb_transfer_id, order.cls, order.qty, order.try_goodie)
-
-        if gets_ticket:
-            # 2) Issue tickets
-            order.ticket_code = f"TCK-{uuid.uuid4().hex[:10].upper()}"
-
-            # 3) Goodie attempt (first 100 per class) — should be atomic in TB in real code
-            order.got_goodie = gets_goodie
-
-            # 4) Update order
-            order.status = "PAID"
-        else:
-            order.status = 'PAID_UNFULFILLED'
-            # We will try to do an immediate transfer before giving up
-            tb_transfer_id, goodie_tb_transfer_id, gets_ticket, gets_goodie = await tigerbeetledb.book_immediately(client, order.cls, order.qty)
-            if gets_ticket:
-                order.status = 'PAID'
+        # Late-success handling
+        if not gets_ticket:
+            order.status = "PAID_UNFULFILLED"
+            tb_transfer_id, goodie_tb_transfer_id, gets_ticket2, gets_goodie2 = await tigerbeetledb.book_immediately(
+                client, order.cls, order.qty
+            )
+            if gets_ticket2:
+                gets_ticket = True
+                gets_goodie = gets_goodie or gets_goodie2
                 order.tb_transfer_id = str(tb_transfer_id)
-                order.goodie_tb_transfer_id = str(goodie_tb_transfer_id) # just for the record
-                if gets_goodie:
-                    order.got_goodie = True
-                order.ticket_code = f"TCK-{uuid.uuid4().hex[:10].upper()}"
-        order.paid_at = now_ts()
-        db.add(FulfillmentKey(key=fulfill_key))
-        await db.commit()
-
+                order.goodie_tb_transfer_id = str(goodie_tb_transfer_id)
     elif kind in ("failed", "canceled"):
-        await tigerbeetledb.cancel_order(client, order.tb_transfer_id, order.goodie_tb_transfer_id, order.cls, order.qty)
-        order.status = "FAILED" if kind == "failed" else "CANCELED"
-        db.add(FulfillmentKey(key=fulfill_key))
-        await db.commit()
+        # Void/rollback TB holds (no DB tx held)
+        await tigerbeetledb.cancel_order(
+            client, order.tb_transfer_id, order.goodie_tb_transfer_id, order.cls, order.qty
+        )
 
-    return {"ok": True, "order_status": order.status}
+    # --- Single DB transaction for ALL writes (no early commits) ---
+    try:
+        # Event-level idempotency marker (PK on idempotency_key). If dup, we ignore.
+        if idem:
+            db.add(WebhookEventSeen(idempotency_key=idem))
+
+        # Fulfillment idempotency (PK on key). If dup, treat as idempotent.
+        db.add(FulfillmentKey(key=fulfill_key))
+
+        if kind == "succeeded":
+            if gets_ticket:
+                if not order.ticket_code:
+                    order.ticket_code = f"TCK-{uuid.uuid4().hex[:10].upper()}"
+                order.got_goodie = bool(gets_goodie)
+                order.status = "PAID"
+            else:
+                # paid but still unfulfilled after immediate attempt
+                order.status = "PAID_UNFULFILLED"
+            order.paid_at = now_ts()
+        else:
+            order.status = "FAILED" if kind == "failed" else "CANCELED"
+            # (paid_at remains None)
+
+        await db.commit()                 # SINGLE COMMIT
+
+        # If we got here, commit succeeded
+        return {"ok": True, "order_status": order.status}
+
+    except IntegrityError:
+        # Either idempotency_key or fulfillment key already seen: idempotent replay.
+        # We deliberately do NOT re-raise; just say it's fine.
+        await db.rollback()
+        return {"ok": True, "idempotent": True, "order_status": order.status}
 
 
 @app.get("/api/inventory")
@@ -382,19 +427,19 @@ async def mockpay_emit(psid: str, request: Request, db: SessionAsync = Depends(g
     payload = json.dumps(event).encode()
     sig = base64.b64encode(hmac.new(MOCK_SECRET.encode(), payload, hashlib.sha256).digest()).decode()
 
-    async with httpx.AsyncClient(timeout=5.0) as client:
-        try:
-            await client.post(
-                MOCK_WEBHOOK_URL,
-                content=payload,
-                headers={
-                    "x-mockpay-signature": sig,
-                    "content-type": "application/json",
-                },
-            )
-        except Exception as e:
-            # For the demo, we don't fail the redirect if webhook doesn't reach; user can retry.
-            print("Webhook delivery failed:", e)
+    client_http: httpx.AsyncClient = app.state.http
+    try:
+        await client_http.post(
+            MOCK_WEBHOOK_URL,
+            content=payload,
+            headers={
+                "x-mockpay-signature": sig,
+                "content-type": "application/json",
+            },
+        )
+    except Exception as e:
+        # For the demo, we don't fail the redirect if webhook doesn't reach; user can retry.
+        print("Webhook delivery failed:", e)
 
     # Redirect UX
     if kind == "succeeded":
