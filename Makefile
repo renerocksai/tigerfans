@@ -25,6 +25,10 @@ server-w2:
 server-w3:
 	 DATABASE_URL="postgresql+asyncpg://devuser:devpass@127.0.0.1:5432/tigerfans" uvicorn tigerfans.server:app --host 0.0.0.0 --port 8000 --workers=3 --no-access-log
 
+# we start with 2 workers as we expect async redis to be efficient
+server-redis:
+	 DATABASE_URL="redis://127.0.0.1:6379/0" uvicorn tigerfans.server:app --host 0.0.0.0 --port 8000 --workers=2 --no-access-log
+
 # this is only for the mac. on prod, we use native postgres w/o docker
 #
 # note: the -e POSTGRES_USER setting does not seem to work. user remains set to
@@ -38,6 +42,9 @@ psql:
 	  -v pgdata:/var/lib/postgresql/data \
 	  --shm-size=512m \
 	  postgres:16
+
+redis:
+	${SUDO} docker run -p 6379:6379 redis:7
 
 # use caddy as reverse proxy for https
 caddy:
