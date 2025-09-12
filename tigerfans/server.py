@@ -16,9 +16,6 @@ Env (optional):
   MOCK_WEBHOOK_URL="http://localhost:8000/payments/webhook"
   MOCK_SECRET="supersecret"
   DATABASE_URL="sqlite:///./demo.db"  (default)
-
-Notes:
-- SQLite is used for persistence. For a demo and single-node setup it works well.
 """
 from __future__ import annotations
 
@@ -221,6 +218,9 @@ async def create_checkout(payload: dict, db: SessionAsync = Depends(get_db), cli
 
     tb_transfer_id, goodie_tb_transfer_id, ticket_ok, goodie_ok = await tigerbeetledb.hold_tickets(client, cls, qty, RESERVATION_TTL_SECONDS)
     if not ticket_ok:
+        if goodie_ok:
+            # cancel the goodie ticket reservation so it doesn't need to time out
+            await tigerbeetledb.cancel_only_goodie(client, goodie_tb_transfer_id)
         raise RuntimeError("Sold Out")
 
     amount = TICKET_CLASSES[cls]["price"] * qty

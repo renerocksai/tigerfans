@@ -264,6 +264,28 @@ async def commit_order(client: tb.ClientAsync, tb_transfer_id: str | int, goodie
     return has_ticket, has_goodie
 
 
+async def cancel_only_goodie(client: tb.ClientAsync, goodie_tb_transfer_id: str | int) -> None:
+    if isinstance(goodie_tb_transfer_id, str):
+        goodie_tb_transfer_id = int(goodie_tb_transfer_id)
+    id_void_goodies = tb.id()
+    transfer_errors = await client.create_transfers([
+        tb.Transfer(
+            id=id_void_goodies,
+            debit_account_id=First_n_budget.id,
+            credit_account_id=First_n_spent.id,
+            amount=1,
+            pending_id=goodie_tb_transfer_id,
+            ledger=LedgerTickets,
+            code=20,
+            flags=tb.TransferFlags.VOID_PENDING_TRANSFER,
+        ),
+    ])
+    if transfer_errors:
+        # we don't really care
+        pass
+    return None
+
+
 async def cancel_order(client: tb.ClientAsync, tb_transfer_id: str | int, goodie_tb_transfer_id: str | int, ticket_class: str, qty: int) -> None:
     if ticket_class not in ['A', 'B']:
         raise ValueError("Unknown class " + ticket_class)
@@ -280,12 +302,12 @@ async def cancel_order(client: tb.ClientAsync, tb_transfer_id: str | int, goodie
         debit_account_id = Class_B_budget.id
         credit_account_id = Class_B_spent.id
 
-    id_post = tb.id()
-    id_post_goodies = tb.id()
+    id_void = tb.id()
+    id_void_goodies = tb.id()
 
     transfer_errors = await client.create_transfers([
         tb.Transfer(
-            id=id_post,
+            id=id_void,
             debit_account_id=debit_account_id,
             credit_account_id=credit_account_id,
             amount=qty,
@@ -295,7 +317,7 @@ async def cancel_order(client: tb.ClientAsync, tb_transfer_id: str | int, goodie
             flags=tb.TransferFlags.VOID_PENDING_TRANSFER,
         ),
         tb.Transfer(
-            id=id_post_goodies,
+            id=id_void_goodies,
             debit_account_id=First_n_budget.id,
             credit_account_id=First_n_spent.id,
             amount=1,
@@ -307,6 +329,7 @@ async def cancel_order(client: tb.ClientAsync, tb_transfer_id: str | int, goodie
     ])
 
     if transfer_errors:
+        # we don't really care
         pass
 
     return None

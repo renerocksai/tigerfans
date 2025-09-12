@@ -18,7 +18,7 @@ server:
 server-w2:
 	 DATABASE_URL="postgresql+asyncpg://postgres:devpass@127.0.0.1:5432/tigerfans" uvicorn tigerfans.server:app --host 0.0.0.0 --port 8000 --workers=2
 
-# 3 workers, postgres
+# 3 workers, postgres, no access log to stdout
 # needs postgres installed.
 # postgres user is set to `devuser` below, so configure your postgres
 # accordingly.
