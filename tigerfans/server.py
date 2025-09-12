@@ -51,7 +51,8 @@ from sqlalchemy import (
 )
 from sqlalchemy.exc import IntegrityError
 from .model.db import (
-    Base, Order, PaymentSession, WebhookEventSeen, FulfillmentKey, make_async_engine
+    Base, Order, PaymentSession, WebhookEventSeen, FulfillmentKey,
+    make_async_engine
 )
 from .helpers import now_ts, to_iso, is_valid_email, ct_equal
 from .mockpay import PaymentAdapter, MockPay, MOCK_SECRET
@@ -88,8 +89,6 @@ engine, SessionAsync = make_async_engine(DATABASE_URL)
 async def get_db() -> AsyncSession:
     async with SessionAsync() as session:
         yield session
-
-
 
 
 adapter: PaymentAdapter = MockPay()
@@ -186,7 +185,8 @@ async def landing_page(request: Request):
             "request": request,
             "site_name": "TigerFans",
             "conf_date": "Dec 3–4, 2025",
-            "conf_tagline": "A conference for people who love fast, correct systems.",
+            "conf_tagline":
+                "A conference for people who love fast, correct systems.",
             "db": DB_KIND,
         },
     )
@@ -196,7 +196,8 @@ async def landing_page(request: Request):
 # Checkout page (force 1 ticket, require email)
 # ----------------------------
 @app.get("/demo/checkout", response_class=HTMLResponse)
-async def demo_checkout_page(request: Request, status: Optional[str] = None, order_id: Optional[str] = None):
+async def demo_checkout_page(request: Request, status: Optional[str] = None,
+                             order_id: Optional[str] = None):
     return templates.TemplateResponse(
         "checkout.html",
         {"request": request, "status": status, "order_id": order_id}
@@ -204,23 +205,33 @@ async def demo_checkout_page(request: Request, status: Optional[str] = None, ord
 
 
 @app.post("/api/checkout")
-async def create_checkout(payload: dict, db: SessionAsync = Depends(get_db), client: "tb.ClientSync" = Depends(get_tb_client)):
+async def create_checkout(payload: dict, db: SessionAsync = Depends(get_db),
+                          client: "tb.ClientSync" = Depends(get_tb_client)):
     cls = payload.get("cls")
     # Enforce single-ticket policy
     qty = 1
     customer_email = (payload.get("customer_email") or "").strip()
 
     if not is_valid_email(customer_email):
-        raise HTTPException(400, detail="customer_email is required and must be a valid email address")
+        raise HTTPException(
+            400,
+            detail="customer_email is required and must be a valid email "
+                   "address"
+        )
 
     if cls not in TICKET_CLASSES:
         raise HTTPException(400, detail="invalid ticket class")
 
-    tb_transfer_id, goodie_tb_transfer_id, ticket_ok, goodie_ok = await tigerbeetledb.hold_tickets(client, cls, qty, RESERVATION_TTL_SECONDS)
+    tb_transfer_id, goodie_tb_transfer_id, ticket_ok, goodie_ok = (
+            await tigerbeetledb.hold_tickets(client, cls, qty,
+                                             RESERVATION_TTL_SECONDS)
+    )
     if not ticket_ok:
         if goodie_ok:
-            # cancel the goodie ticket reservation so it doesn't need to time out
-            await tigerbeetledb.cancel_only_goodie(client, goodie_tb_transfer_id)
+            # cancel the goodie ticket reservation so it doesn't need to
+            # time out
+            await tigerbeetledb.cancel_only_goodie(client,
+                                                   goodie_tb_transfer_id)
         raise RuntimeError("Sold Out")
 
     amount = TICKET_CLASSES[cls]["price"] * qty
@@ -270,7 +281,8 @@ async def get_order(order_id: str, db: SessionAsync = Depends(get_db)):
     # raw sql -> sqlalchemy won't start an implicit transaction
     result = await db.execute(
         text("""
-            SELECT id, status, cls, qty, amount, currency, paid_at, ticket_code, got_goodie
+            SELECT id, status, cls, qty, amount, currency, paid_at,
+                   ticket_code, got_goodie
             FROM orders WHERE id = :id
         """),
         {"id": order_id},
@@ -308,27 +320,7 @@ async def payments_webhook(
     psid, idem = adapter.event_ids(event)
     if not psid:
         raise HTTPException(400, detail="missing payment_session_id")
-    ######
-    # Variant 1
-    ######
-    # # look up session + order (reads)
-    # session = await db.get(PaymentSession, psid)
-    # if not session:
-    #     raise HTTPException(404, detail="payment session not found")
-    # order = await db.get(Order, session.order_id)
-    # if not order:
-    #     raise HTTPException(404, detail="order not found")
-    #
-    # # Try to short-circuit idempotency **without a transaction** (optional read).
-    # # We **could** remove this read: inserts below are guarded anyway.
-    # fulfill_key = f"{order.id}:{psid}"
-    # if await db.get(FulfillmentKey, fulfill_key):
-    #     return {"ok": True, "idempotent": True}
-    ######
 
-    ######
-    # Variant 2
-    ######
     # one round-trip: PaymentSession -> Order
     result = await db.execute(
         select(Order).select_from(
@@ -337,8 +329,10 @@ async def payments_webhook(
     )
     order = result.scalars().first()
     if not order:
-        # either the payment session doesn't exist or it doesn't link to an order
-        raise HTTPException(404, detail="order not found for payment_session_id")
+        # either the payment session doesn't exist or it doesn't link to
+        # an order
+        raise HTTPException(404,
+                            detail="order not found for payment_session_id")
 
     # Optional early idempotency short-circuit (kept same behavior)
     fulfill_key = f"{order.id}:{psid}"
@@ -361,9 +355,15 @@ async def payments_webhook(
         # Late-success handling
         if not gets_ticket:
             order.status = "PAID_UNFULFILLED"
-            tb_transfer_id, goodie_tb_transfer_id, gets_ticket2, gets_goodie2 = await tigerbeetledb.book_immediately(
+            (
+                tb_transfer_id,
+                goodie_tb_transfer_id,
+                gets_ticket2,
+                gets_goodie2
+            ) = await tigerbeetledb.book_immediately(
                 client, order.cls, order.qty
             )
+
             if gets_ticket2:
                 gets_ticket = True
                 gets_goodie = gets_goodie or gets_goodie2
@@ -372,12 +372,14 @@ async def payments_webhook(
     elif kind in ("failed", "canceled"):
         # Void/rollback TB holds (no DB tx held)
         await tigerbeetledb.cancel_order(
-            client, order.tb_transfer_id, order.goodie_tb_transfer_id, order.cls, order.qty
+            client, order.tb_transfer_id, order.goodie_tb_transfer_id,
+            order.cls, order.qty
         )
 
     # --- Single DB transaction for ALL writes (no early commits) ---
     try:
-        # Event-level idempotency marker (PK on idempotency_key). If dup, we ignore.
+        # Event-level idempotency marker (PK on idempotency_key).
+        # If dup, we ignore.
         if idem:
             db.add(WebhookEventSeen(idempotency_key=idem))
 
@@ -404,7 +406,8 @@ async def payments_webhook(
         return {"ok": True, "order_status": order.status}
 
     except IntegrityError:
-        # Either idempotency_key or fulfillment key already seen: idempotent replay.
+        # Either idempotency_key or fulfillment key already seen: idempotent
+        # replay.
         # We deliberately do NOT re-raise; just say it's fine.
         await db.rollback()
         return {"ok": True, "idempotent": True, "order_status": order.status}
@@ -420,7 +423,8 @@ async def get_inventory(client: "tb.ClientSync" = Depends(get_tb_client)):
 # ----------------------------
 # MockPay
 @app.get("/mockpay/{psid}", response_class=HTMLResponse)
-async def mockpay_screen(request: Request, psid: str, db: SessionAsync = Depends(get_db)):
+async def mockpay_screen(request: Request, psid: str,
+                         db: SessionAsync = Depends(get_db)):
     session = await db.get(PaymentSession, psid)
     if not session:
         raise HTTPException(404, detail="payment session not found")
@@ -440,7 +444,8 @@ async def mockpay_screen(request: Request, psid: str, db: SessionAsync = Depends
 
 
 @app.post("/mockpay/{psid}/emit")
-async def mockpay_emit(psid: str, request: Request, db: SessionAsync = Depends(get_db)):
+async def mockpay_emit(psid: str, request: Request,
+                       db: SessionAsync = Depends(get_db)):
     form = await request.form()
     kind = form.get("t")  # succeeded|failed|canceled
     if kind not in {"succeeded", "failed", "canceled"}:
@@ -460,7 +465,12 @@ async def mockpay_emit(psid: str, request: Request, db: SessionAsync = Depends(g
         "idempotency_key": f"evt_{uuid.uuid4().hex}",
     }
     payload = json.dumps(event).encode()
-    sig = base64.b64encode(hmac.new(MOCK_SECRET.encode(), payload, hashlib.sha256).digest()).decode()
+    sig = base64.b64encode(
+        hmac.new(
+            MOCK_SECRET.encode(),
+            payload,
+            hashlib.sha256
+            ).digest()).decode()
 
     client_http: httpx.AsyncClient = app.state.http
     try:
@@ -473,16 +483,26 @@ async def mockpay_emit(psid: str, request: Request, db: SessionAsync = Depends(g
             },
         )
     except Exception as e:
-        # For the demo, we don't fail the redirect if webhook doesn't reach; user can retry.
+        # For the demo, we don't fail the redirect if webhook doesn't reach;
+        # user can retry.
         print("Webhook delivery failed:", e)
 
     # Redirect UX
     if kind == "succeeded":
-        return RedirectResponse(url=f"/demo/success?order_id={session.order_id}", status_code=303)
+        return RedirectResponse(
+            url=f"/demo/success?order_id={session.order_id}",
+            status_code=303
+        )
     elif kind == "failed":
-        return RedirectResponse(url=f"/demo/checkout?status=failed&order_id={session.order_id}", status_code=303)
+        return RedirectResponse(
+            url=f"/demo/checkout?status=failed&order_id={session.order_id}",
+            status_code=303
+        )
     else:
-        return RedirectResponse(url=f"/demo/checkout?status=canceled&order_id={session.order_id}", status_code=303)
+        return RedirectResponse(
+            url=f"/demo/checkout?status=canceled&order_id={session.order_id}",
+            status_code=303
+        )
 
 
 # ----------------------------
@@ -490,11 +510,15 @@ async def mockpay_emit(psid: str, request: Request, db: SessionAsync = Depends(g
 # ----------------------------
 # Success page
 @app.get("/demo/success", response_class=HTMLResponse)
-async def demo_success_page(request: Request, order_id: str, db: SessionAsync = Depends(get_db)):
+async def demo_success_page(request: Request, order_id: str,
+                            db: SessionAsync = Depends(get_db)):
     order = await db.get(Order, order_id)
     if not order:
         raise HTTPException(404, detail="order not found")
-    return templates.TemplateResponse("success.html", {"request": request, "order_id": order_id})
+    return templates.TemplateResponse(
+        "success.html",
+        {"request": request, "order_id": order_id}
+    )
 
 
 # ----------------------------
@@ -503,7 +527,10 @@ async def demo_success_page(request: Request, order_id: str, db: SessionAsync = 
 
 @app.get("/admin/login", response_class=HTMLResponse)
 async def admin_login_get(request: Request, next: str | None = "/admin"):
-    return templates.TemplateResponse("login.html", {"request": request, "next": next, "error": None})
+    return templates.TemplateResponse(
+        "login.html",
+        {"request": request, "next": next, "error": None}
+    )
 
 
 @app.post("/admin/login", response_class=HTMLResponse)
@@ -517,7 +544,10 @@ async def admin_login_post(
     ok_pass = ct_equal(password, ADMIN_PASSWORD)
     if ok_user and ok_pass:
         request.session["admin_user"] = username.strip()
-        return RedirectResponse(url=(next or "/admin"), status_code=HTTP_303_SEE_OTHER)
+        return RedirectResponse(
+            url=(next or "/admin"),
+            status_code=HTTP_303_SEE_OTHER
+        )
     # auth failed
     return templates.TemplateResponse(
         "login.html",
@@ -534,18 +564,33 @@ async def admin_logout(request: Request):
 
 # Admin page
 @app.get("/admin", response_class=HTMLResponse)
-async def admin_page(request: Request, db: SessionAsync = Depends(get_db), client: "tb.ClientSync" = Depends(get_tb_client)):
+async def admin_page(request: Request, db: SessionAsync = Depends(get_db),
+                     client: "tb.ClientSync" = Depends(get_tb_client)):
     if not is_admin(request):
         dest = request.url.path
-        return RedirectResponse(url=f"/admin/login?next={dest}", status_code=307)
+        return RedirectResponse(
+            url=f"/admin/login?next={dest}",
+            status_code=307
+        )
 
     result = await db.execute(
-        text("SELECT id, status, cls, qty, amount, currency, paid_at, got_goodie, ticket_code, customer_email FROM orders ORDER BY created_at DESC LIMIT 200")
+        text("""
+            SELECT id, status, cls, qty, amount, currency, paid_at, got_goodie,
+                   ticket_code, customer_email
+            FROM orders
+            ORDER BY created_at DESC LIMIT 200
+            """)
     )
     rows = result.all()
     orders = []
-    for (oid, status, cls, qty, amount, currency, paid_at, got_goodie, ticket_code, email) in rows:
-        paid_iso = '-' if paid_at is None else datetime.fromtimestamp(paid_at, tz=timezone.utc).isoformat()
+    for (
+        oid, status, cls, qty, amount, currency, paid_at, got_goodie,
+        ticket_code, email
+    ) in rows:
+        paid_iso = '-' if paid_at is None else datetime.fromtimestamp(
+            paid_at, tz=timezone.utc
+        ).isoformat()
+
         orders.append({
             "id": oid,
             "status": status,

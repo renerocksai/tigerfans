@@ -24,7 +24,9 @@ class CreateSessionResult(TypedDict):
 
 class PaymentAdapter(ABC):
     @abstractmethod
-    def create_session(self, db: AsyncSession, order: Order, meta: dict) -> CreateSessionResult: ...
+    def create_session(
+            self, db: AsyncSession, order: Order, meta: dict
+    ) -> CreateSessionResult: ...
 
     # this is to take a shortcut and commit in the endpoint
     @abstractmethod
@@ -33,12 +35,14 @@ class PaymentAdapter(ABC):
     @abstractmethod
     def verify_webhook(self, payload: bytes, headers: dict) -> dict: ...
 
+    # "succeeded" | "failed" | "canceled"
     @abstractmethod
-    def event_kind(self, event: dict) -> str:  # "succeeded" | "failed" | "canceled"
+    def event_kind(self, event: dict) -> str:
         ...
 
+    # (payment_session_id, idempotency_key)
     @abstractmethod
-    def event_ids(self, event: dict) -> Tuple[str, Optional[str]]:  # (payment_session_id, idempotency_key)
+    def event_ids(self, event: dict) -> Tuple[str, Optional[str]]:
         ...
 
 
@@ -49,7 +53,9 @@ class MockPay(PaymentAdapter):
 
     # we don't use that anymore. to save one DB commit, create the session in
     # the endpoint
-    async def create_session(self, db: AsyncSession, order: Order, meta: dict) -> CreateSessionResult:
+    async def create_session(
+            self, db: AsyncSession, order: Order, meta: dict
+    ) -> CreateSessionResult:
         psid = f"mock_{uuid.uuid4().hex}"
         db.add(PaymentSession(
             id=psid,
@@ -83,4 +89,7 @@ class MockPay(PaymentAdapter):
         return event.get("type", "").split(".")[-1]
 
     def event_ids(self, event: dict) -> Tuple[str, Optional[str]]:
-        return event.get("payment_session_id", ""), event.get("idempotency_key")
+        return (
+                event.get("payment_session_id", ""),
+                event.get("idempotency_key")
+        )

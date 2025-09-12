@@ -12,8 +12,11 @@ Simulates the browser flow against the server:
 It records timings per order and prints an aggregate report.
 
 Usage:
-  python load_client.py --base http://localhost:8000 --total 200 --concurrency 50
-  python load_client.py --base https://your.domain --total 100 --concurrency 20 --fail-rate 0.1
+  python load_client.py --base http://localhost:8000 \
+                        --total 200 --concurrency 50
+
+  python load_client.py --base https://your.domain \
+                        --total 100 --concurrency 20 --fail-rate 0.1
 
 Notes:
 - This targets the MockPay flow.
@@ -32,7 +35,9 @@ import httpx
 
 
 def _rand_email() -> str:
-    name = ''.join(random.choices(string.ascii_lowercase + string.digits, k=10))
+    name = ''.join(
+        random.choices(string.ascii_lowercase + string.digits, k=10)
+    )
     return f"{name}@example.com"
 
 
@@ -55,7 +60,10 @@ class Stats:
         self.results.append(r)
 
     def summary(self) -> Dict[str, float]:
-        done = [r for r in self.results if r.outcome in ("PAID", "FAILED", "CANCELED")]
+        done = [
+            r for r in self.results
+            if r.outcome in ("PAID", "FAILED", "CANCELED")
+        ]
         paid = [r for r in self.results if r.outcome == "PAID"]
         lat = [r.t_observed for r in done if r.t_observed > 0]
 
@@ -70,7 +78,9 @@ class Stats:
             "ok": sum(1 for r in self.results if r.ok),
             "paid": len(paid),
             "failed": sum(1 for r in self.results if r.outcome == "FAILED"),
-            "canceled": sum(1 for r in self.results if r.outcome == "CANCELED"),
+            "canceled": sum(
+                1 for r in self.results if r.outcome == "CANCELED"
+            ),
             "timeout": sum(1 for r in self.results if r.outcome == "TIMEOUT"),
             "error": sum(1 for r in self.results if r.outcome == "ERROR"),
             "p50_s": pct(50),
@@ -82,12 +92,21 @@ class Stats:
     def print(self, elapsed_s: float):
         s = self.summary()
         print("\n=== Load Summary ===")
-        print(f"Total: {int(s['total'])}   OK: {int(s['ok'])}   "
-              f"PAID: {int(s['paid'])}   FAILED: {int(s['failed'])}   "
-              f"CANCELED: {int(s['canceled'])}   TIMEOUT: {int(s['timeout'])}   ERROR: {int(s['error'])}")
-        print(f"Latency (observed order resolution): "
-              f"avg {s['avg_s']:.3f}s   p50 {s['p50_s']:.3f}s   p90 {s['p90_s']:.3f}s   p99 {s['p99_s']:.3f}s")
-        print(f"Wall time: {elapsed_s:.3f}s   Throughput: {s['total']/elapsed_s:.1f} ops/s")
+        print(
+            f"Total: {int(s['total'])}   OK: {int(s['ok'])}   "
+            f"PAID: {int(s['paid'])}   FAILED: {int(s['failed'])}   "
+            f"CANCELED: {int(s['canceled'])}   TIMEOUT: {int(s['timeout'])}"
+            f"   ERROR: {int(s['error'])}"
+        )
+        print(
+            f"Latency (observed order resolution): "
+            f"avg {s['avg_s']:.3f}s   p50 {s['p50_s']:.3f}s   "
+            f"p90 {s['p90_s']:.3f}s   p99 {s['p99_s']:.3f}s"
+        )
+        print(
+            f"Wall time: {elapsed_s:.3f}s   "
+            f"Throughput: {s['total']/elapsed_s:.1f} ops/s"
+        )
 
 
 async def one_order(
@@ -190,8 +209,12 @@ async def run_load(
     sem = asyncio.Semaphore(concurrency)
     stats = Stats()
 
-    limits = httpx.Limits(max_keepalive_connections=concurrency, max_connections=concurrency)
-    async with httpx.AsyncClient(limits=limits, http2=http2, headers={"User-Agent": "TigerFansLoad/1.0"}) as client:
+    limits = httpx.Limits(
+        max_keepalive_connections=concurrency, max_connections=concurrency
+    )
+    async with httpx.AsyncClient(
+        limits=limits, http2=http2, headers={"User-Agent": "TigerFansLoad/1.0"}
+    ) as client:
 
         async def worker(n: int):
             async with sem:
@@ -219,19 +242,31 @@ async def run_load(
 
 def main():
     ap = argparse.ArgumentParser(description="TigerFans load client")
-    ap.add_argument("--base", default="http://localhost:8000", help="Base URL of the app")
-    ap.add_argument("--total", type=int, default=100, help="Total orders to run")
-    ap.add_argument("--concurrency", type=int, default=20, help="Concurrent workers")
-    ap.add_argument("--ratio-a", type=float, default=0.5, help="Probability of class A (0..1)")
-    ap.add_argument("--fail-rate", type=float, default=0.0, help="Fraction of orders to mark as failed")
-    ap.add_argument("--cancel-rate", type=float, default=0.0, help="Fraction of orders to mark as canceled")
-    ap.add_argument("--poll-interval", type=float, default=0.05, help="Seconds between status polls")
-    ap.add_argument("--poll-timeout", type=float, default=10.0, help="Max seconds to wait for non-PENDING")
-    ap.add_argument("--http2", action="store_true", help="Enable HTTP/2 if server supports it")
+    ap.add_argument("--base", default="http://localhost:8000",
+                    help="Base URL of the app")
+    ap.add_argument("--total", type=int, default=100,
+                    help="Total orders to run")
+    ap.add_argument("--concurrency", type=int, default=20,
+                    help="Concurrent workers")
+    ap.add_argument("--ratio-a", type=float, default=0.5,
+                    help="Probability of class A (0..1)")
+    ap.add_argument("--fail-rate", type=float, default=0.0,
+                    help="Fraction of orders to mark as failed")
+    ap.add_argument("--cancel-rate", type=float, default=0.0,
+                    help="Fraction of orders to mark as canceled")
+    ap.add_argument("--poll-interval", type=float, default=0.05,
+                    help="Seconds between status polls")
+    ap.add_argument("--poll-timeout", type=float, default=10.0,
+                    help="Max seconds to wait for non-PENDING")
+    ap.add_argument("--http2", action="store_true",
+                    help="Enable HTTP/2 if server supports it")
     args = ap.parse_args()
 
     if args.fail_rate + args.cancel_rate > 0.95:
-        print("Warning: combined fail+cancel rate is very high; few PAID outcomes will occur.")
+        print(
+            "Warning: combined fail+cancel rate is very high; "
+            "few PAID outcomes will occur."
+        )
 
     t_start = time.perf_counter()
     stats = asyncio.run(run_load(

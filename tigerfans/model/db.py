@@ -6,12 +6,14 @@ from sqlalchemy import (
     String,
     Float,
     Boolean,
-    create_engine,
+    # create_engine,
     # UniqueConstraint,
     event,
     # text,
 )
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+from sqlalchemy.ext.asyncio import (
+    create_async_engine, async_sessionmaker, AsyncSession
+)
 
 
 Base = declarative_base()

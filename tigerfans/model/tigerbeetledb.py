@@ -112,7 +112,10 @@ async def initial_transfers(client: tb.ClientAsync):
     return
 
 
-async def hold_tickets(client: tb.ClientAsync, ticket_class: str, qty: int, timeout_seconds=int) -> Tuple[str, str, bool, bool]:
+async def hold_tickets(
+        client: tb.ClientAsync, ticket_class: str, qty: int,
+        timeout_seconds=int
+) -> Tuple[str, str, bool, bool]:
     # we issue 2 transfers: one for the actual tickets and one for the goodie
     # counter
     if ticket_class not in ['A', 'B']:
@@ -161,7 +164,9 @@ async def hold_tickets(client: tb.ClientAsync, ticket_class: str, qty: int, time
     return tb_transfer_id, goodie_tb_transfer_id, has_ticket, has_goodie
 
 
-async def book_immediately(client: tb.ClientAsync, ticket_class: str, qty: int) -> Tuple[str, str, bool, bool]:
+async def book_immediately(
+        client: tb.ClientAsync, ticket_class: str, qty: int
+) -> Tuple[str, str, bool, bool]:
     # we issue 2 transfers: one for the actual tickets and one for the goodie
     # counter
     if ticket_class not in ['A', 'B']:
@@ -205,7 +210,11 @@ async def book_immediately(client: tb.ClientAsync, ticket_class: str, qty: int) 
     return tb_transfer_id, goodie_tb_transfer_id, has_ticket, has_goodie
 
 
-async def commit_order(client: tb.ClientAsync, tb_transfer_id: str | int, goodie_tb_transfer_id: str | int, ticket_class: str, qty: int, try_goodie: bool) -> Tuple[bool, bool]:
+async def commit_order(
+        client: tb.ClientAsync, tb_transfer_id: str | int,
+        goodie_tb_transfer_id: str | int, ticket_class: str, qty: int,
+        try_goodie: bool
+) -> Tuple[bool, bool]:
     if ticket_class not in ['A', 'B']:
         raise ValueError("Unknown class " + ticket_class)
 
@@ -264,7 +273,10 @@ async def commit_order(client: tb.ClientAsync, tb_transfer_id: str | int, goodie
     return has_ticket, has_goodie
 
 
-async def cancel_only_goodie(client: tb.ClientAsync, goodie_tb_transfer_id: str | int) -> None:
+async def cancel_only_goodie(
+        client: tb.ClientAsync,
+        goodie_tb_transfer_id: str | int
+) -> None:
     if isinstance(goodie_tb_transfer_id, str):
         goodie_tb_transfer_id = int(goodie_tb_transfer_id)
     id_void_goodies = tb.id()
@@ -286,7 +298,10 @@ async def cancel_only_goodie(client: tb.ClientAsync, goodie_tb_transfer_id: str 
     return None
 
 
-async def cancel_order(client: tb.ClientAsync, tb_transfer_id: str | int, goodie_tb_transfer_id: str | int, ticket_class: str, qty: int) -> None:
+async def cancel_order(
+        client: tb.ClientAsync, tb_transfer_id: str | int,
+        goodie_tb_transfer_id: str | int, ticket_class: str, qty: int
+) -> None:
     if ticket_class not in ['A', 'B']:
         raise ValueError("Unknown class " + ticket_class)
 
@@ -336,13 +351,17 @@ async def cancel_order(client: tb.ClientAsync, tb_transfer_id: str | int, goodie
 
 
 async def compute_inventory(client: tb.ClientAsync) -> dict:
-    accounts = await client.lookup_accounts([Class_A_spent.id, Class_B_spent.id])
+    accounts = await client.lookup_accounts(
+        [Class_A_spent.id, Class_B_spent.id]
+    )
     out = {}
     now = now_ts()
     for ticket_class, account in zip(['A', 'B'], accounts):
         sold = account.credits_posted
         held = account.credits_pending
-        budget = TicketAmount_Class_A if ticket_class == 'A' else TicketAmount_Class_B
+        budget = TicketAmount_Class_A
+        if ticket_class == 'B':
+            budget = TicketAmount_Class_B
         available = budget - sold - held
         out[ticket_class] = {
             "capacity": TicketAmount_Class_A,
