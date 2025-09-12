@@ -2,6 +2,8 @@
 
 _Resource reservations, payment flows, and consistency — in one clean demo._
 
+See a live-demo [here](https://tigerfans.technologylab.ai)!
+
 TigerFans is a prototype **ticketing system demo** that shows how
 **[TigerBeetle](https://tigerbeetle.com)** can be applied beyond financial
 transactions. It models a fictional **conference booking system** with a payment
@@ -11,11 +13,12 @@ flow:
 
 - **Checkout** creates an order and places a **time-limited hold**
 - An **external payment step** decides the outcome
-- A **webhook callback** then **finalizes** or **voids** the order
+- A **webhook callback** from the payment provider then **finalizes** or
+  **voids** the order
 
 The system demonstrates **time-limited holds** (pending transfers) for tickets
 and a **conditional goodie grant**: the ticket is committed on payment success,
-and a goodie is granted if goodies are still available
+and a goodie is granted if goodies are still available.
 
 > 💡 This demo is not about benchmarking or raw performance. It’s meant to show
 how TigerBeetle fits into a **realistic booking flow**, rather than just an
@@ -30,7 +33,8 @@ in an SQL table.
   payment success or **voided on timeout/failure**.
 - 🎁 **Goodie unlocks**: first 100 paid orders, granted with the ticket.
 - **MockPay** provider with **redirect + webhook** flow (no real payments).
-- **FastAPI** backend; **SQLite** for app state (orders, payments).
+- **FastAPI** backend. Python is `easy`.
+- **SQLite** or **PostgreSQL** for app state (orders, payments).
 - **Admin dashboard** (basic, protected by HTTP Basic Auth)
 -  **UI pages**: landing, checkout, success incl. QR-code download
 
@@ -73,6 +77,33 @@ To see the last 200 orders, go to
 [http://localhost:8000/admin](http://localhost:8000/admin) and log in with
 username `admin` and password `supasecret`.
 
+**Note:** Above commands start TigerFans in development mode where sqlite is
+used as a database. Because SQLite is an in-process database, only 1 worker is
+allowed. Don't expect Oasis scale 65 tickets per second = O(1) performance with
+this setup.
+
+---
+
+## TigerFans in Production
+
+To run TigerFans in a more production-like environment, we recommend:
+
+- A host with >= 4 vCPUs, >= 4 GB of RAM
+- PostgreSQL installed natively. See our [postgresql.conf](./postgresql.conf).
+  - For a quick start, you can run PostgreSQL in docker. See
+    [Makefile](./Makefile) target `psql` for an example.
+- Start uvicorn with 3 workers on a 4-CPU machine. (Makefile target
+  `server-w3`).
+- Tigerbeetle in development mode (single node) on the same node seems fine.
+  (Makefile target `tb`).
+- Use [Caddy](https://caddyserver.com) as reverse proxy for HTTPS support. See
+  the `caddy` target in the [Makefile](./Makefile) and
+  [docker-compose-caddy](./docker-compose-caddy.yml).
+
+On a `c7g.xlarge` EC2 instance, we achieve O(1.7) = 110 tickets per second with
+above setup.
+
+---
 
 ## Run the demo in docker
 
