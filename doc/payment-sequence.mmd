@@ -1,0 +1,52 @@
+sequenceDiagram
+    participant B as Browser
+    participant S as Backend
+    participant P as Postgres
+    participant T as TigerBeetle
+    participant M as MockPay
+
+    B->>S: place order (email, ticket, goodies)
+    S->>T: PENDING (ticket, goodies count)
+    T-->>S: OK (transfer_ids)
+
+    S->>P: BEGIN TX
+    S->>P: INSERT Order (id, email, transfer_ids)
+    S->>P: INSERT PaymentSession (id, order_id, amount, redirect_url)
+    S->>P: COMMIT TX
+    P-->>S: OK
+
+    S-->>B: go redirect to mockpay (redirect_url)
+
+    B->>M: redirect to MockPay
+
+    M->>P: GET PaymentSession
+    P-->>M: payment session
+    M-->>B: mockpay HTML
+
+    B->>M: click Success
+    M->>S: PAYMENT_SUCCESS webhook
+
+    S->>P: GET Order, PaymentSession
+    P-->>S: order, payment session
+
+    S->>P: Try GET FulfillmentKey
+    P-->>S: EXISTS NOT
+
+
+    S->>T: POST PENDING (ticket, goodie)
+    T-->>S: OK
+
+    S->>P: BEGIN TX
+    S->>P: INSERT WebhookSeen (idempotency)
+    S->>P: INSERT FulfillmentKey (idempotency)
+    S->>P: UPDATE Order (status=paid, …)
+    S->>P: COMMIT TX
+    P-->>S: OK
+
+    S-->>M: Webhook OK → redirect to success page
+    M-->>B: redirect to success page
+
+    B->>S: request success page
+    S->>P: GET Order
+    P-->>S: order
+    S-->>B: success page HTML
