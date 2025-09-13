@@ -76,7 +76,8 @@ DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./demo.db")
 DB_KIND = "sqlite"
 if DATABASE_URL.startswith("postgres"):
     DB_KIND = "postgres"
-elif DATABASE_URL.startswith("redis"):
+elif DATABASE_URL.startswith("redis") or DATABASE_URL.startswith('rediss') \
+        or DATABASE_URL.startswith('unix'):
     DB_KIND = "redis"
 
 TICKET_CLASSES = {"A": {"price": 6500}, "B": {"price": 3500}}  # cents (EUR)

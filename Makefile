@@ -25,9 +25,13 @@ server-w2:
 server-w3:
 	 DATABASE_URL="postgresql+asyncpg://devuser:devpass@127.0.0.1:5432/tigerfans" uvicorn tigerfans.server:app --host 0.0.0.0 --port 8000 --workers=3 --no-access-log
 
-# we start with 2 workers as we expect async redis to be efficient
+# one worker seems best
 server-redis:
-	 DATABASE_URL="redis://127.0.0.1:6379/0" uvicorn tigerfans.server:app --host 0.0.0.0 --port 8000 --workers=2 --no-access-log
+	 DATABASE_URL="redis://127.0.0.1:6379/0" uvicorn tigerfans.server:app --host 0.0.0.0 --port 8000 --workers=1 --no-access-log
+
+# one worker seems best
+server-redis-unix:
+	  DATABASE_URL="unix:///$(CURDIR)/data/redis.sock?db=0" uvicorn tigerfans.server:app --host 0.0.0.0 --port 8000 --workers=1 --no-access-log
 
 # this is only for the mac. on prod, we use native postgres w/o docker
 #
@@ -43,10 +47,11 @@ psql:
 	  --shm-size=512m \
 	  postgres:16
 
+# redis with TCP and UNIX socket
 redis:
 	${SUDO} docker run -d --name redis \
 	  -p 6379:6379 \
-	  -v redisdata:/data \
+	  -v $(CURDIR)/data:/data \
 	  --ulimit nofile=100000:100000 \
 	  --sysctl net.core.somaxconn=1024 \
 	  redis:7 \
@@ -56,7 +61,10 @@ redis:
 	    --save "" \
 	    --tcp-keepalive 300 \
 	    --io-threads 4 \
-	    --io-threads-do-reads yes
+	    --io-threads-do-reads yes \
+	    --unixsocket /data/redis.sock \
+	    --unixsocketperm 777
+
 
 # use caddy as reverse proxy for https
 caddy:
