@@ -44,7 +44,19 @@ psql:
 	  postgres:16
 
 redis:
-	${SUDO} docker run -p 6379:6379 redis:7
+	${SUDO} docker run -d --name redis \
+	  -p 6379:6379 \
+	  -v redisdata:/data \
+	  --ulimit nofile=100000:100000 \
+	  --sysctl net.core.somaxconn=1024 \
+	  redis:7 \
+	  redis-server \
+	    --appendonly yes \
+	    --appendfsync everysec \
+	    --save "" \
+	    --tcp-keepalive 300 \
+	    --io-threads 4 \
+	    --io-threads-do-reads yes
 
 # use caddy as reverse proxy for https
 caddy:

@@ -151,7 +151,7 @@ async def init_db():
 async def _http_client_start():
     app.state.http = httpx.AsyncClient(
         timeout=5.0,
-        limits=httpx.Limits(max_connections=128, max_keepalive_connections=128)
+        limits=httpx.Limits(max_connections=512, max_keepalive_connections=512)
     )
 
 
@@ -177,6 +177,10 @@ async def _redis_start():
         app.state.redis = redis.Redis.from_url(
             DATABASE_URL,
             decode_responses=True,
+            max_connections=512,
+            socket_timeout=2.0,
+            socket_connect_timeout=2.0,
+            retry_on_timeout=True,
         )
 
 
