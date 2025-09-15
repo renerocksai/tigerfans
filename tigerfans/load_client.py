@@ -18,9 +18,6 @@ Usage:
   python load_client.py --base https://your.domain \
                         --total 100 --concurrency 20 --fail-rate 0.1
 
-Notes:
-- This targets the MockPay flow.
-- Keep server workers=1 with SQLite to avoid lock contention artifacts.
 """
 
 import asyncio

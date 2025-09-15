@@ -34,9 +34,10 @@ in an SQL table.
 - 🎁 **Goodie unlocks**: first 100 paid orders, granted with the ticket.
 - **MockPay** provider with **redirect + webhook** flow (no real payments).
 - **FastAPI** backend. Python is `easy`.
-- **SQLite** or **PostgreSQL** for app state (orders, payments).
+- **Redis** for reservations and payment idempotency checks
+- **PostgreSQL** for orders
 - **Admin dashboard** (basic, protected by HTTP Basic Auth)
--  **UI pages**: landing, checkout, success incl. QR-code download
+- **UI pages**: landing, checkout, success incl. QR-code download
 
 > 📄 **See [doc/tigerbeetle.md](doc/tigerbeetle.md) for more details about how we
 model TigerBeetle accounts and transfers.**
@@ -61,15 +62,23 @@ $ pip install -r requirements.txt
 ```console
 
 # init and start tigerbeetle
-$ ./start_tigerbeetle.sh
+$ make tb
 ```
+### Start PostgreSQL and Redis (needs docker)
+
+```console
+
+$ make psql
+$ make redis
+```
+
 
 ### Start the server
 
-With Tigerbeetle running:
+With Tigerbeetle, PostgreSQL, and Redis running:
 
 ```console
-$ uvicorn tigerfans.server:app --reload --port=8000
+$ make server
 ```
 Connect your browser to [http://localhost:8000/](http://localhost:8000).
 
@@ -77,10 +86,7 @@ To see the last 200 orders, go to
 [http://localhost:8000/admin](http://localhost:8000/admin) and log in with
 username `admin` and password `supasecret`.
 
-**Note:** Above commands start TigerFans in development mode where sqlite is
-used as a database. Because SQLite is an in-process database, only 1 worker is
-allowed. Don't expect Oasis scale 65 tickets per second = O(1) performance with
-this setup.
+**Note:** Above commands start TigerFans in development mode
 
 ---
 
@@ -113,24 +119,4 @@ Latency (observed order resolution): avg 0.041s   p50 0.042s   p90 0.083s   p99 
 Wall time: 7.736s   Throughput: 129.3 ops/s
 ```
 
----
 
-## Run the demo in docker
-
-> ⚠️ Works on macOS (M3 tested), but not on AWS due to io_uring limitations in
-> Docker.
-
-```console
-$ docker-compose up --build
-```
-Wait for the app to start:
-
-```
-app-1  | INFO:     Application startup complete.
-```
-
-Then connect your browser to [http://localhost:8000/](http://localhost:8000).
-
-To see the last 200 orders, go to
-[http://localhost:8000/admin](http://localhost:8000/admin) and log in with
-username `admin` and password `supasecret`.

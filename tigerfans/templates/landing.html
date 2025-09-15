@@ -30,22 +30,16 @@
               </p>
             </div>
             <div class="p-4 squircle bg-slate-900 border border-white/10">
-              <p class="text-xs text-slate-400">cluster size</p>
+              <p class="text-xs text-slate-400">tigerbeetle cluster size</p>
               <p class="text-2xl font-bold">1 (single-replica)</p>
             </div>
             <div class="p-4 squircle bg-slate-900 border border-white/10">
-              <p class="text-xs text-slate-400">orders database</p>
-              {% if db == 'sqlite' %}
-              <p class="text-2xl font-bold"><a href="https://sqlite.org" target="_blank">SQLite</a></p>
-              {% elif db == 'redis' %}
+              <p class="text-xs text-slate-400">reservations store</p>
               <p class="text-2xl font-bold"><a href="https://redis.io" target="_blank">Redis</a></p>
-              {% else %}
-              <p class="text-2xl font-bold"><a href="https://www.postgresql.org/" target="_blank">PostgreSQL</a></p>
-              {% endif %}
             </div>
             <div class="p-4 squircle bg-slate-900 border border-white/10">
-              <p class="text-xs text-slate-400">payment provider</p>
-              <p class="text-2xl font-bold">MockPay</p>
+              <p class="text-xs text-slate-400">orders database</p>
+              <p class="text-2xl font-bold"><a href="https://www.postgresql.org/" target="_blank">PostgreSQL</a></p>
             </div>
           </div>
           <p class="mt-4 text-sm text-slate-400">All transactions in the demo are mock-paid, inventory tracked with TigerBeetle.</p>

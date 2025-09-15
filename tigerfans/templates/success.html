@@ -41,6 +41,10 @@
   const errBox = document.getElementById('errBox');
   const instructions = document.getElementById('instructions');
 
+  let startedAt = Date.now();
+  const PENDING_SOFT_MS = 30_000;   // show gentle reassurance after 30s
+  const PENDING_HARD_MS = 120_000;  // stronger notice after 2 minutes
+
   function setPaidUI() {
     statusText.textContent = 'PAID';
     statusText.className = 'font-semibold text-emerald-300';
@@ -60,6 +64,31 @@
     statusText.className = 'font-semibold text-amber-300';
     errBox.textContent = 'Payment received but tickets are no longer available. We will reconcile or refund.';
     errBox.classList.remove('hidden');
+  }
+
+  function setCanceledUI() {
+    statusText.textContent = 'CANCELED';
+    statusText.className = 'font-semibold text-slate-300';
+    errBox.textContent = 'Payment canceled by user.';
+    errBox.classList.remove('hidden');
+  }
+
+  // --- state for pending UX ---
+  let firstPendingAt = null;     // timestamp when we first saw PENDING
+  let lastWarnLevel = 0;         // 0 = none, 1 = soft, 2 = hard
+
+  function pendingSoftNotice() {
+    if (lastWarnLevel >= 1) return;
+    errBox.textContent = 'Processing payment… this can take a moment.';
+    errBox.classList.remove('hidden');
+    lastWarnLevel = 1;
+  }
+
+  function pendingHardNotice() {
+    if (lastWarnLevel >= 2) return;
+    errBox.textContent = 'Still processing… waiting for the payment callback. If this takes unusually long, try refreshing.';
+    errBox.classList.remove('hidden');
+    lastWarnLevel = 2;
   }
 
   function renderTickets(ticket_code, gotGoodie) {
@@ -131,27 +160,47 @@
     try {
       const res = await fetch(`/api/orders/${orderId}`, { cache: 'no-store' });
       const j = await res.json();
-      // Update status line (light until paid)
+
       if (j.status === 'PAID') {
         setPaidUI();
         renderTickets(j.ticket_code, j.got_goodie);
         clearInterval(timer);
-      } else if (j.status === 'PAID_UNFULFILLED') {
+        return;
+      }
+      if (j.status === 'PAID_UNFULFILLED') {
         setUnfulfilledUI();
         clearInterval(timer);
-      } else if (j.status === 'FAILED' || j.status === 'CANCELED') {
+        return;
+      }
+      if (j.status === 'FAILED') {
         setFailedUI();
         clearInterval(timer);
-      } else {
-        statusText.textContent = j.status;
-        statusText.className = 'text-slate-300';
+        return;
+      }
+      if (j.status === 'CANCELED') {
+        setCanceledUI();
+        clearInterval(timer);
+        return;
+      }
+
+      // PENDING
+      statusText.textContent = j.status;
+      statusText.className = 'text-slate-300';
+      if (!firstPendingAt) firstPendingAt = performance.now();
+      const elapsed = performance.now() - firstPendingAt;
+
+      if (elapsed >= PENDING_HARD_MS) {
+        pendingHardNotice();
+      } else if (elapsed >= PENDING_SOFT_MS) {
+        pendingSoftNotice();
       }
     } catch (e) {
-      // network or JSON error: show once, keep polling
+      // network/JSON error: show once, keep polling
       errBox.textContent = 'Temporary error loading status. Retrying…';
       errBox.classList.remove('hidden');
     }
   }
+
   const timer = setInterval(tick, 1000);
   tick();
 </script>

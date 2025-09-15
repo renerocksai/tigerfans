@@ -1,6 +1,6 @@
 """
-Ticketing Demo  (FastAPI + MockPay adapter + TigerBeetle + SQLite)
-------------------------------------------------------------------
+Ticketing Demo  (FastAPI + MockPay adapter + TigerBeetle + PostgreSQL + Redis)
+------------------------------------------------------------------------------
 Goals:
 - Two ticket classes: A (premium) and B (standard)
 - First 100 successful buyers receive a goodie
@@ -8,16 +8,13 @@ Goals:
 - Mock payment provider with redirect + webhook flow
 - Clean adapter boundary so we can later swap in Stripe
 - **SQLite instead of in-memory** so the demo persists and survives restarts
+    - has been superseeded by PostgreSQL and Redis
 
 Run locally:
-  uvicorn tigerfans/server:app --reload
-
-Env (optional):
-  MOCK_WEBHOOK_URL="http://localhost:8000/payments/webhook"
-  MOCK_SECRET="supersecret"
-  DATABASE_URL="sqlite:///./demo.db"  (default)
+  see the Makefile
 """
 from __future__ import annotations
+import sys
 
 import base64
 import hashlib
@@ -38,8 +35,7 @@ from fastapi.templating import Jinja2Templates
 
 
 from .model import tigerbeetledb
-from .model import redis_store as rs
-
+from tigerfans.model.reservations import ReservationStore
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -71,14 +67,11 @@ MOCK_WEBHOOK_URL = os.environ.get(
     "MOCK_WEBHOOK_URL",
     "http://localhost:8000/payments/webhook"
 )
-DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./demo.db")
+DATABASE_URL = os.environ.get("DATABASE_URL", None)
 
-DB_KIND = "sqlite"
-if DATABASE_URL.startswith("postgres"):
-    DB_KIND = "postgres"
-elif DATABASE_URL.startswith("redis") or DATABASE_URL.startswith('rediss') \
-        or DATABASE_URL.startswith('unix'):
-    DB_KIND = "redis"
+if DATABASE_URL is None:
+    print("NEED DATABASE_URL! See Makefile")
+    sys.exit(1)
 
 TICKET_CLASSES = {"A": {"price": 6500}, "B": {"price": 3500}}  # cents (EUR)
 GOODIE_LIMIT_PER_CLASS = tigerbeetledb.TicketAmount_first_n
@@ -90,18 +83,14 @@ ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "supasecret")
 
 
 # ----------------------------
-# Database setup (SQLite)
+# Database setup
 # ----------------------------
-if DB_KIND != 'redis':
-    engine, SessionAsync = make_async_engine(DATABASE_URL)
+engine, SessionAsync = make_async_engine(DATABASE_URL)
 
 
 async def get_db() -> AsyncSession:
-    if DB_KIND != 'redis':
-        async with SessionAsync() as session:
-            yield session
-    else:
-        yield None
+    async with SessionAsync() as session:
+        yield session
 
 
 adapter: PaymentAdapter = MockPay()
@@ -119,11 +108,11 @@ app.mount("/static", StaticFiles(directory="tigerfans/static"), name="static")
 app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET)
 
 
-def get_redis() -> redis.Redis:
-    r = getattr(app.state, "redis", None)
-    if r is None:
-        raise RuntimeError("Redis client not initialized")
-    return r
+def reservations() -> ReservationStore:
+    rs = getattr(app.state, "resv", None)
+    if not rs:
+        raise RuntimeError("ReservationStore not initialized")
+    return rs
 
 
 # ---
@@ -143,9 +132,8 @@ async def _tb_start():
 
 @app.on_event("startup")
 async def init_db():
-    if DB_KIND != 'redis':
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
 
 
 @app.on_event("startup")
@@ -153,6 +141,22 @@ async def _http_client_start():
     app.state.http = httpx.AsyncClient(
         timeout=5.0,
         limits=httpx.Limits(max_connections=512, max_keepalive_connections=512)
+    )
+
+
+@app.on_event("startup")
+async def _redis_start():
+    REDIS_URL = os.getenv("REDIS_URL", "redis://127.0.0.1:6379")
+    app.state.redis = redis.from_url(
+        REDIS_URL,
+        decode_responses=True,
+        max_connections=int(os.getenv("REDIS_MAX_CONN", "512")),
+        socket_timeout=2.0,
+        socket_connect_timeout=2.0,
+        retry_on_timeout=True,
+    )
+    app.state.resv = ReservationStore(
+        app.state.redis, ttl_seconds=RESERVATION_TTL_SECONDS
     )
 
 
@@ -170,28 +174,6 @@ async def _tb_stop():
     if client is not None:
         await client.close()
         app.state.tb_client = None
-
-
-@app.on_event("startup")
-async def _redis_start():
-    if DB_KIND == 'redis':
-        app.state.redis = redis.Redis.from_url(
-            DATABASE_URL,
-            decode_responses=True,
-            max_connections=512,
-            socket_timeout=2.0,
-            socket_connect_timeout=2.0,
-            retry_on_timeout=True,
-        )
-
-
-@app.on_event("shutdown")
-async def _redis_stop():
-    if DB_KIND == 'redis':
-        r = getattr(app.state, "redis", None)
-        if r is not None:
-            await r.aclose()
-            app.state.redis = None
 
 
 # ----------------------------
@@ -230,7 +212,6 @@ async def landing_page(request: Request):
             "conf_date": "Dec 3–4, 2025",
             "conf_tagline":
                 "A conference for people who love fast, correct systems.",
-            "db": DB_KIND,
         },
     )
 
@@ -278,50 +259,24 @@ async def create_checkout(payload: dict, db: SessionAsync = Depends(get_db),
         raise RuntimeError("Sold Out")
 
     amount = TICKET_CLASSES[cls]["price"] * qty
-    order_id = uuid.uuid4().hex
     session = adapter.create_session_id_and_url()
+    psid = session["payment_session_id"]
+    order_id = uuid.uuid4().hex
     currency = "eur"
 
-    if DB_KIND == 'redis':
-        r = get_redis()
-        await rs.create_order_and_session(
-            r,
-            order_id=order_id,
-            cls=cls, qty=1,
-            amount=amount, currency=currency,
-            email=customer_email,
-            created_at=now_ts(),
-            tb_transfer_id=str(tb_transfer_id),
-            goodie_tb_transfer_id=str(goodie_tb_transfer_id),
-            try_goodie=goodie_ok,
-            psid=session["payment_session_id"],
-        )
-    else:
-        async with db.begin():
-            order = Order(
-                id=order_id,
-                tb_transfer_id=str(tb_transfer_id),
-                goodie_tb_transfer_id=str(goodie_tb_transfer_id),
-                try_goodie=goodie_ok,
-                cls=cls,
-                qty=qty,
-                amount=amount,
-                currency=currency,
-                customer_email=customer_email,
-                created_at=now_ts(),
-                status="PENDING",
-            )
-            db.add(order)
-
-            payment_session = PaymentSession(
-                id=session["payment_session_id"],
-                order_id=order_id,
-                amount=amount,
-                currency=currency,
-                created_at=now_ts(),
-            )
-            order.payment_session_id = session["payment_session_id"]
-            db.add(payment_session)
+    rs = reservations()
+    await rs.save_payment_session(psid, {
+        "order_id": order_id,
+        "cls": cls,
+        "qty": "1",
+        "customer_email": customer_email,
+        "tb_transfer_id": str(tb_transfer_id),
+        "goodie_tb_transfer_id": str(goodie_tb_transfer_id),
+        "try_goodie": "1" if goodie_ok else "0",
+        "amount": str(amount),
+        "currency": "eur",
+        "created_at": str(now_ts()),
+    })
 
     return {
         "order_id": order_id,
@@ -336,23 +291,6 @@ async def create_checkout(payload: dict, db: SessionAsync = Depends(get_db),
 # ----------------------------
 @app.get("/api/orders/{order_id}")
 async def get_order(order_id: str, db: SessionAsync = Depends(get_db)):
-    if DB_KIND == 'redis':
-        r = get_redis()
-        h = await rs.get_order(r, order_id)
-        if not h:
-            raise HTTPException(404, "order not found")
-        return {
-            "order_id": h["id"],
-            "status": h["status"],
-            "cls": h["cls"],
-            "qty": int(h["qty"]),
-            "amount": int(h["amount"]),
-            "currency": h["currency"],
-            "paid_at": to_iso(float(h["paid_at"])) if h.get("paid_at") else None,
-            "ticket_code": h.get("ticket_code") or "",
-            "got_goodie": h.get("got_goodie") == "1",
-        }
-
     # raw sql -> sqlalchemy won't start an implicit transaction
     result = await db.execute(
         text("""
@@ -364,6 +302,7 @@ async def get_order(order_id: str, db: SessionAsync = Depends(get_db)):
     )
     row = result.mappings().first()
     if not row:
+        # not created yet (webhook still processing) -> let client keep polling
         raise HTTPException(404, detail="order not found")
     return {
         "order_id": row["id"],
@@ -396,186 +335,189 @@ async def payments_webhook(
     if not psid:
         raise HTTPException(400, detail="missing payment_session_id")
 
-    # ---------- REDIS PATH ----------
-    if DB_KIND == "redis":
-        r = get_redis()
+    rs = reservations()
+    ps = await rs.get_payment_session(psid)
+    if not ps:
+        raise HTTPException(404, detail="payment session not found")
 
-        # one round-trip: PaymentSession -> Order
-        ps = await rs.get_payment_session(r, psid)
-        if not ps:
-            raise HTTPException(404, detail="payment session not found")
-        order_id = ps["order_id"]
-        order = await rs.get_order(r, order_id)
-        if not order:
-            raise HTTPException(404, detail="order not found")
-
-        # Optional early idempotency short-circuit (no write)
-        if await r.exists(rs.k_fulfill(order_id, psid)):
-            return {"ok": True, "idempotent": True}
-
-        # --- Provider-side work first (no Redis tx held) ---
-        if kind == "succeeded":
-            gets_ticket, gets_goodie = await tigerbeetledb.commit_order(
-                client,
-                order["tb_transfer_id"],
-                order["goodie_tb_transfer_id"],
-                order["cls"],
-                int(order["qty"]),
-                order.get("try_goodie") == "1",
-            )
-
-            # Late-success handling
-            if not gets_ticket:
-                (
-                    tb_transfer_id, goodie_tb_transfer_id, gets_ticket2,
-                    gets_goodie2
-                ) = await tigerbeetledb.book_immediately(
-                    client, order["cls"], int(order["qty"])
-                )
-                if gets_ticket2:
-                    gets_ticket = True
-                    gets_goodie = gets_goodie or gets_goodie2
-                    # Best-effort update of TB ids
-                    await r.hset(rs.k_order(order_id), mapping={
-                        "tb_transfer_id": str(tb_transfer_id),
-                        "goodie_tb_transfer_id": str(goodie_tb_transfer_id),
-                    })
-
-            if gets_ticket:
-                ticket_code = f"TCK-{uuid.uuid4().hex[:10].upper()}"
-                res = await rs.fulfill_success(
-                    r,
-                    order_id=order_id,
-                    psid=psid,
-                    idem_key=idem,
-                    ticket_code=ticket_code,
-                    got_goodie=bool(gets_goodie),
-                    now_ts=now_ts(),
-                )
-                return {
-                    "ok": True,
-                    "idempotent": (res == "idempotent"),
-                    "order_status": "PAID",
-                }
-            else:
-                # paid but unfulfilled after immediate attempt
-                await r.hset(rs.k_order(order_id), mapping={
-                    "status": "PAID_UNFULFILLED",
-                    "paid_at": now_ts(),
-                })
-                await r.srem(rs.k_idx_status("PENDING"), order_id)
-                await r.sadd(rs.k_idx_status("PAID_UNFULFILLED"), order_id)
-                return {"ok": True, "order_status": "PAID_UNFULFILLED"}
-
-        elif kind in ("failed", "canceled"):
-            await tigerbeetledb.cancel_order(
-                client,
-                order["tb_transfer_id"],
-                order["goodie_tb_transfer_id"],
-                order["cls"],
-                int(order["qty"]),
-            )
-            new_status = "FAILED" if kind == "failed" else "CANCELED"
-            await rs.mark_failed_or_canceled(r, order_id, new_status)
-            return {"ok": True, "order_status": new_status}
-
-        else:
-            raise HTTPException(400, "unsupported event")
-
-    # ---------- SQL PATH ----------
-    # one round-trip: PaymentSession -> Order
-    result = await db.execute(
-        select(Order).select_from(
-            join(PaymentSession, Order, PaymentSession.order_id == Order.id)
-        ).where(PaymentSession.id == psid)
-    )
-    order = result.scalars().first()
-    if not order:
-        # either the payment session doesn't exist or it doesn't link to
-        # an order
-        raise HTTPException(404,
-                            detail="order not found for payment_session_id")
-
-    # Optional early idempotency short-circuit (kept same behavior)
-    fulfill_key = f"{order.id}:{psid}"
-    if await db.get(FulfillmentKey, fulfill_key):
+    # Optional gate: if already fulfilled, short-circuit
+    if not await rs.fulfill_gate(psid):
         return {"ok": True, "idempotent": True}
 
-    # --- Do provider-side work first (TB), without holding a DB tx ---
+    # Event-level idempotency (optional)
+    if not await rs.mark_event_seen(idem):
+        return {"ok": True, "idempotent": True}
+
+    # Extract inputs from Redis (strings -> ints where needed)
+    order_id = ps["order_id"]
+    cls = ps["cls"]
+    qty = int(ps["qty"])
+    amount = int(ps["amount"])
+    currency = ps["currency"]
+    email = ps["customer_email"]
+    tb_transfer_id = ps["tb_transfer_id"]
+    goodie_tb_transfer_id = ps["goodie_tb_transfer_id"]
+    try_goodie = (ps.get("try_goodie") == "1")
+
+    # --- TigerBeetle first (no DB tx held) ---
+    gets_ticket = False
+    gets_goodie = False
+
     if kind == "succeeded":
         gets_ticket, gets_goodie = await tigerbeetledb.commit_order(
             client,
-            order.tb_transfer_id,
-            order.goodie_tb_transfer_id,
-            order.cls,
-            order.qty,
-            order.try_goodie,
+            tb_transfer_id,
+            goodie_tb_transfer_id,
+            cls,
+            qty,
+            try_goodie,
         )
 
-        # Late-success handling
+        # Late-success best effort
         if not gets_ticket:
-            order.status = "PAID_UNFULFILLED"
             (
-                tb_transfer_id,
-                goodie_tb_transfer_id,
-                gets_ticket2,
-                gets_goodie2
-            ) = await tigerbeetledb.book_immediately(
-                client, order.cls, order.qty
-            )
-
+                tb2, goodie2, gets_ticket2, gets_goodie2
+            ) = await tigerbeetledb.book_immediately(client, cls, qty)
             if gets_ticket2:
                 gets_ticket = True
                 gets_goodie = gets_goodie or gets_goodie2
-                order.tb_transfer_id = str(tb_transfer_id)
-                order.goodie_tb_transfer_id = str(goodie_tb_transfer_id)
+                # (Optional) We *could* add a method to ReservationStore to
+                # update these IDs in Redis, but it's not required anymore
+                # since we’re about to persist to Postgres.
     elif kind in ("failed", "canceled"):
-        # Void/rollback TB holds (no DB tx held)
         await tigerbeetledb.cancel_order(
-            client, order.tb_transfer_id, order.goodie_tb_transfer_id,
-            order.cls, order.qty
+            client, tb_transfer_id, goodie_tb_transfer_id, cls, qty
         )
+        # No durable write needed for failure/cancel (by design of the hybrid)
+        # but we don't forget to flush!
+        await rs.remove_pending(psid)
 
-    # --- Single DB transaction for ALL writes (no early commits) ---
-    try:
-        # Event-level idempotency marker (PK on idempotency_key).
-        # If dup, we ignore.
-        if idem:
-            db.add(WebhookEventSeen(idempotency_key=idem))
+    # --- Durable write to Postgres (success path) ---
+    if kind == "succeeded":
+        ticket_code = None
+        if gets_ticket:
+            ticket_code = f"TCK-{uuid.uuid4().hex[:10].upper()}"
+        status = "PAID" if gets_ticket else "PAID_UNFULFILLED"
 
-        # Fulfillment idempotency (PK on key). If dup, treat as idempotent.
-        db.add(FulfillmentKey(key=fulfill_key))
+        try:
+            async with db.begin():
+                db.add(Order(
+                    id=order_id,
+                    tb_transfer_id=str(tb_transfer_id),
+                    goodie_tb_transfer_id=str(goodie_tb_transfer_id),
+                    try_goodie=try_goodie,
+                    cls=cls,
+                    qty=qty,
+                    amount=amount,
+                    currency=currency,
+                    customer_email=email,
+                    created_at=now_ts(),       # or carry from ps["created_at"]
+                    status=status,
+                    paid_at=now_ts(),
+                    ticket_code=ticket_code,
+                    got_goodie=bool(gets_goodie),
+                ))
+        except IntegrityError:
+            # If we see this, it’s an idempotent replay racing the first write.
+            await db.rollback()
+        # don't forget to flush!
+        await rs.remove_pending(psid)
+        return {"ok": True, "order_status": status}
 
-        if kind == "succeeded":
-            if gets_ticket:
-                if not order.ticket_code:
-                    order.ticket_code = f"TCK-{uuid.uuid4().hex[:10].upper()}"
-                order.got_goodie = bool(gets_goodie)
-                order.status = "PAID"
-            else:
-                # paid but still unfulfilled after immediate attempt
-                order.status = "PAID_UNFULFILLED"
-            order.paid_at = now_ts()
-        else:
-            order.status = "FAILED" if kind == "failed" else "CANCELED"
-            # (paid_at remains None)
-
-        await db.commit()                 # SINGLE COMMIT
-
-        # If we got here, commit succeeded
-        return {"ok": True, "order_status": order.status}
-
-    except IntegrityError:
-        # Either idempotency_key or fulfillment key already seen: idempotent
-        # replay.
-        # We deliberately do NOT re-raise; just say it's fine.
-        await db.rollback()
-        return {"ok": True, "idempotent": True, "order_status": order.status}
+    # failed/canceled
+    return {
+        "ok": True,
+        "order_status": "FAILED" if kind == "failed" else "CANCELED"
+    }
 
 
 @app.get("/api/inventory")
 async def get_inventory(client: "tb.ClientSync" = Depends(get_tb_client)):
     return await tigerbeetledb.compute_inventory(client)
+
+
+@app.get("/api/pending")
+async def api_pending(limit: int = 100):
+    rs = reservations()
+    total = await rs.r.zcard(rs.PENDING_INDEX)
+    psids = await rs.list_recent_psids(limit=limit)
+
+    # Pipeline to fetch all payment-session hashes
+    pipe = rs.r.pipeline()
+    for psid in psids:
+        pipe.hgetall(f"ps:{psid}")
+    rows = await pipe.execute()
+
+    now = time.time()
+    items = []
+    for psid, h in zip(psids, rows):
+        if not h:
+            await rs.remove_pending(psid)
+            continue
+
+        try:
+            created = float(h.get("created_at", "0"))
+        except ValueError:
+            created = 0.0
+        items.append({
+            "psid": psid,
+            "created_at": created,
+            "age_ms": int(max(0.0, now - created) * 1000),
+            "order_id": h.get("order_id", ""),
+            "cls": h.get("cls", ""),
+            "qty": int(h.get("qty", "1")),
+            "email": h.get("customer_email", h.get("email", "")),
+            "amount": int(h.get("amount", "0")),
+            "currency": h.get("currency", "eur"),
+            "try_goodie": (h.get("try_goodie") == "1"),
+            "status": "PENDING",
+        })
+
+    return {"items": items, "enabled": True, 'limit': limit, 'total': total}
+
+
+# ---- Admin JSON feed: goodies counter ----
+@app.get("/api/admin/goodies")
+async def api_admin_goodies(client: "tb.ClientAsync" = Depends(get_tb_client)):
+    used = await tigerbeetledb.count_goodies(client)
+    return {
+        "used": int(used),
+        "limit": int(tigerbeetledb.TicketAmount_first_n),
+    }
+
+
+@app.get("/api/admin/orders")
+async def api_admin_orders(limit: int = 200,
+                           db: SessionAsync = Depends(get_db)):
+    result = await db.execute(
+        text("""
+            SELECT id, status, cls, qty, amount, currency, paid_at,
+                   got_goodie, ticket_code, customer_email, created_at
+            FROM orders
+            ORDER BY created_at DESC
+            LIMIT :limit
+        """),
+        {"limit": max(1, min(limit, 500))},
+    )
+    rows = result.mappings().all()
+    items = []
+    for r in rows:
+        paid_iso = '-' if r["paid_at"] is None else datetime.fromtimestamp(
+            r["paid_at"], tz=timezone.utc
+        ).isoformat()
+        items.append({
+            "id": r["id"],
+            "status": r["status"],
+            "cls": r["cls"],
+            "qty": r["qty"],
+            "amount": r["amount"],
+            "currency": r["currency"],
+            "paid_at_iso": paid_iso,
+            "got_goodie": bool(r["got_goodie"]),
+            "ticket_code": r["ticket_code"] or "",
+            "email": r["customer_email"] or "",
+        })
+    return {"items": items, 'limit': limit}
 
 
 # ----------------------------
@@ -585,49 +527,19 @@ async def get_inventory(client: "tb.ClientSync" = Depends(get_tb_client)):
 @app.get("/mockpay/{psid}", response_class=HTMLResponse)
 async def mockpay_screen(request: Request, psid: str,
                          db: SessionAsync = Depends(get_db)):
-    if DB_KIND == "redis":
-        r = get_redis()
-        session = await rs.get_payment_session(r, psid)
-        if not session:
-            raise HTTPException(404, detail="payment session not found")
-
-        order_id = session["order_id"]
-        order = await rs.get_order(r, order_id)
-        if not order:
-            raise HTTPException(404, detail="order not found")
-
-        return templates.TemplateResponse(
-            "mockpay.html",
-            {
-                "request": request,
-                "psid": psid,
-                "order_id": order["id"],
-                "cls": order["cls"],
-                "qty": int(order["qty"]),
-                "amount_eur": f"{int(session['amount'])/100.0:.2f}",
-                "webhook_url": MOCK_WEBHOOK_URL,
-            }
-        )
-    else:
-        session = await db.get(PaymentSession, psid)
-        if not session:
-            raise HTTPException(404, detail="payment session not found")
-        order = await db.get(Order, session.order_id)
-        if not order:
-            raise HTTPException(404, detail="order not found")
-
-    return templates.TemplateResponse(
-        "mockpay.html",
-        {
-            "request": request,
-            "psid": psid,
-            "order_id": order.id,
-            "cls": order.cls,
-            "qty": order.qty,
-            "amount_eur": f"{session.amount/100.0:.2f}",
-            "webhook_url": MOCK_WEBHOOK_URL,
-        }
-    )
+    rs = reservations()
+    ps = await rs.get_payment_session(psid)
+    if not ps:
+        raise HTTPException(404, "payment session not found")
+    return templates.TemplateResponse("mockpay.html", {
+        "request": request,
+        "psid": psid,
+        "order_id": ps['order_id'],
+        "cls": ps["cls"],
+        "qty": 1,
+        "amount_eur": f"{int(ps['amount'])/100:.2f}",
+        "webhook_url": MOCK_WEBHOOK_URL,
+    })
 
 
 @app.post("/mockpay/{psid}/emit")
@@ -638,38 +550,28 @@ async def mockpay_emit(psid: str, request: Request,
     if kind not in {"succeeded", "failed", "canceled"}:
         raise HTTPException(400, detail="invalid kind")
 
-    if DB_KIND == "redis":
-        r = get_redis()
-        session = await rs.get_payment_session(r, psid)
-        if not session:
-            raise HTTPException(404, detail="payment session not found")
+    rs = reservations()
+    ps = await rs.get_payment_session(psid)
+    if not ps:
+        raise HTTPException(404, "payment session not found")
 
-        # Build event from Redis hash (strings -> ints as needed)
-        order_id = session["order_id"]
-        event = {
-            "type": f"payment.{kind}",
-            "payment_session_id": psid,
-            "order_id": session["order_id"],
-            "amount": int(session["amount"]),
-            "currency": session["currency"],
-            "created_at": int(time.time()),
-            "idempotency_key": f"evt_{uuid.uuid4().hex}",
-        }
+    rs = reservations()
+    session = await rs.get_payment_session(psid)
+    if not session:
+        raise HTTPException(404, detail="payment session not found")
 
-    else:
-        session = await db.get(PaymentSession, psid)
-        if not session:
-            raise HTTPException(404, detail="payment session not found")
-        order_id = session_obj.order_id
-        event = {
-            "type": f"payment.{kind}",
-            "payment_session_id": psid,
-            "order_id": session.order_id,
-            "amount": session.amount,
-            "currency": session.currency,
-            "created_at": int(time.time()),
-            "idempotency_key": f"evt_{uuid.uuid4().hex}",
-        }
+    # Build event from Redis hash (strings -> ints as needed)
+    order_id = ps['order_id']
+    event = {
+        "type": f"payment.{kind}",
+        "payment_session_id": psid,
+        "order_id": order_id,
+        "amount": int(session["amount"]),
+        "currency": session["currency"],
+        "created_at": int(time.time()),
+        "idempotency_key": f"evt_{uuid.uuid4().hex}",
+    }
+
     payload = json.dumps(event).encode()
     sig = base64.b64encode(
         hmac.new(
@@ -716,18 +618,7 @@ async def mockpay_emit(psid: str, request: Request,
 # ----------------------------
 # Success page
 @app.get("/demo/success", response_class=HTMLResponse)
-async def demo_success_page(request: Request, order_id: str,
-                            db: SessionAsync = Depends(get_db)):
-    if DB_KIND == "redis":
-        r = get_redis()
-        order = await rs.get_order(r, order_id)
-        if not order:
-            raise HTTPException(404, detail="order not found")
-    else:
-        order = await db.get(Order, order_id)
-        if not order:
-            raise HTTPException(404, detail="order not found")
-
+async def demo_success_page(request: Request, order_id: str):
     return templates.TemplateResponse(
         "success.html",
         {"request": request, "order_id": order_id}
@@ -786,74 +677,11 @@ async def admin_page(request: Request, db: SessionAsync = Depends(get_db),
             status_code=307
         )
 
-    if DB_KIND == "redis":
-        r = get_redis()
-        ids = await rs.list_recent_orders(r, limit=200)
-
-        # pipeline to fetch all orders
-        pipe = r.pipeline()
-        for oid in ids:
-            pipe.hgetall(rs.k_order(oid))
-        rows = await pipe.execute()
-
-        orders = []
-        for h in rows:
-            if not h:
-                continue
-            paid_at = float(h["paid_at"]) if h.get("paid_at") else None
-            paid_iso = '-' if paid_at is None else datetime.fromtimestamp(
-                paid_at, tz=timezone.utc
-            ).isoformat()
-            orders.append({
-                "id": h["id"],
-                "status": h["status"],
-                "cls": h["cls"],
-                "qty": int(h["qty"]),
-                "amount": int(h["amount"]),
-                "currency": h["currency"],
-                "paid_at_iso": paid_iso,
-                "got_goodie": h.get("got_goodie") == "1",
-                "ticket_code": h.get("ticket_code"),
-                "email": h.get("customer_email"),
-            })
-    else:
-        result = await db.execute(
-            text("""
-                SELECT id, status, cls, qty, amount, currency, paid_at,
-                       got_goodie, ticket_code, customer_email
-                FROM orders
-                ORDER BY created_at DESC LIMIT 200
-                """)
-        )
-        rows = result.all()
-        orders = []
-        for (
-            oid, status, cls, qty, amount, currency, paid_at, got_goodie,
-            ticket_code, email
-        ) in rows:
-            paid_iso = '-' if paid_at is None else datetime.fromtimestamp(
-                paid_at, tz=timezone.utc
-            ).isoformat()
-
-            orders.append({
-                "id": oid,
-                "status": status,
-                "cls": cls,
-                "qty": qty,
-                "amount": amount,
-                "currency": currency,
-                "paid_at_iso": paid_iso,
-                "got_goodie": got_goodie,
-                "ticket_code": ticket_code,
-                "email": email,
-            })
-
     goodies_count = await tigerbeetledb.count_goodies(client)
     return templates.TemplateResponse(
         "admin.html",
         {
             "request": request,
-            "orders": orders,
             "goodies": goodies_count,
             "goodie_limit": tigerbeetledb.TicketAmount_first_n,
             "site_name": "TigerFans",

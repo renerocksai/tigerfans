@@ -1,16 +1,177 @@
 {% extends "base.html" %}
 {% block title %}Admin — TigerFans{% endblock %}
 
+{% block head %}
+<style>
+.text-neon-pink {
+  color: rgb(244 114 182); /* Tailwind's pink-400 */
+  /* text-shadow: */
+  /*   0 0 5px rgba(244, 114, 182, 0.8), */
+  /*   0 0 10px rgba(244, 114, 182, 0.6), */
+  /*   0 0 20px rgba(244, 114, 182, 0.4); */
+  text-shadow:
+    0 0 5px rgba(244, 114, 182, 0.6),   /* bright pink close glow */
+    0 0 10px rgba(168, 85, 247, 0.4),  /* violet mid glow */
+    0 0 15px rgba(147, 51, 234, 0.2);  /* purple far glow */
+}
+.text-neon-cyan {
+  color: #1ed1ec; /* your target base */
+  text-shadow:
+    0 0 5px rgba(30, 209, 236, 0.7),   /* close glow in same cyan */
+    0 0 10px rgba(6, 182, 212, 0.5),   /* Tailwind cyan-500 mid glow */
+    0 0 20px rgba(14, 165, 233, 0.3);  /* blue-500 far glow */
+}
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="glass squircle p-6">
-  <h2 class="text-2xl font-semibold">Admin</h2>
-  <div class="mt-4 grid sm:grid-cols-2 gap-4">
-    <div class="glass squircle p-4">
-      <p><strong>Goodies used:</strong> {{ goodies }} / {{ goodie_limit }}</p>
+
+  <h2 class="text-4xl mb-12 font-semibold text-center text-white
+             drop-shadow-[0_0_8px_rgba(236,72,153,0.6)]">
+    Admin Live Dashboard
+  </h2>
+
+  <div class="mt-8 flex justify-center">
+    <!-- <div class="glass squircle p-4 border border-pink-400/70 bg-pink-500/10"> -->
+    <div class="glass squircle p-4 border border-cyan-400/70 bg-cyan-500/10">
+      <p class="text-center">
+        <!-- <strong class="text-pink-200 font-semibold text-neon-pink" > -->
+        <strong class="text-cyan-200 font-semibold text-neon-cyan" >
+          Goodies used: &nbsp; &nbsp;
+        </strong>
+        <b><span id="goodies-used" class="text-pink-200 text-neon-pink">-</span> </b> &nbsp; of &nbsp;
+        <span id="goodies-limit">-</span>
+        <span id="goodies-meta" class="ml-2 text-xs text-slate-400"></span>
+      </p>
     </div>
   </div>
+  <script>
+    (function () {
+      const usedEl  = document.getElementById('goodies-used');
+      const limitEl = document.getElementById('goodies-limit');
+      const metaEl  = document.getElementById('goodies-meta');
 
-  <div class="mt-6 overflow-x-auto">
+      async function loadGoodies() {
+        try {
+          const res = await fetch('/api/admin/goodies', { cache: 'no-store' });
+          const j = await res.json();
+          usedEl.textContent  = j.used;
+          limitEl.textContent = j.limit;
+          metaEl.textContent  = '';
+        } catch {
+          metaEl.textContent = 'error';
+        }
+      }
+
+      loadGoodies();
+      setInterval(loadGoodies, 3000); // 3s
+    })();
+  </script>
+
+
+
+  <!-- live pendings view ;-) -->
+  <section class="mt-12 mb-8 border border-amber-500/30 bg-amber-500/5 rounded-xl p-4">
+    <div class="flex justify-between items-center">
+      <h2 class="text-lg font-semibold text-amber-400">Pending Reservations</h2>
+      <span id="pending-meta" class="text-xs text-slate-400"></span>
+    </div>
+    <div id="pending-empty" class="text-sm text-slate-400 hidden">
+      No pending reservations.
+    </div>
+
+    <div class="overflow-x-auto border border-slate-800 rounded-xl">
+      <table class="min-w-full text-sm">
+        <thead class="bg-slate-900">
+          <tr>
+            <th class="px-3 py-2 text-left">Age</th>
+            <th class="px-3 py-2 text-left">PSID</th>
+            <th class="px-3 py-2 text-left">Order</th>
+            <th class="px-3 py-2 text-left">Class</th>
+            <th class="px-3 py-2 text-left">Qty</th>
+            <th class="px-3 py-2 text-left">Email</th>
+            <th class="px-3 py-2 text-left">Amount</th>
+            <th class="px-3 py-2 text-left">Goodie?</th>
+          </tr>
+        </thead>
+        <tbody id="pending-body"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <script>
+    (function () {
+      const body = document.getElementById('pending-body');
+      const empty = document.getElementById('pending-empty');
+      const meta = document.getElementById('pending-meta');
+
+      function fmtAge(ms) {
+        const s = Math.floor(ms / 1000);
+        if (s < 60) return s + 's';
+        const m = Math.floor(s / 60);
+        const rs = s % 60;
+        return m + 'm ' + rs + 's';
+      }
+      function fmtAmount(cents, currency) {
+        const v = (cents / 100).toFixed(2);
+        return v + ' ' + currency.toUpperCase();
+      }
+
+      async function loadPendings() {
+        try {
+          const res = await fetch('/api/pending', { cache: 'no-store' });
+          const j = await res.json();
+          const items = j.items || [];
+          meta.textContent = `${j.total} pending (showing max ${j.limit})`;
+          if (items.length === 0) {
+            body.innerHTML = '';
+            empty.classList.remove('hidden');
+            meta.classList.add('hidden');
+            return;
+          } else {
+            meta.classList.remove('hidden');
+            empty.classList.add('hidden');
+          }
+
+          // newest first by created_at
+          items.sort((a,b) => b.created_at - a.created_at);
+
+          body.innerHTML = items.map(it => `
+            <tr class="border-t border-slate-800">
+              <td class="px-3 py-2 text-slate-300">${fmtAge(it.age_ms)}</td>
+              <td class="px-3 py-2 font-mono text-xs">${it.psid}</td>
+              <td class="px-3 py-2 font-mono text-xs">${it.order_id || '-'}</td>
+              <td class="px-3 py-2">${it.cls}</td>
+              <td class="px-3 py-2">${it.qty}</td>
+              <td class="px-3 py-2">${it.email || '-'}</td>
+              <td class="px-3 py-2">${fmtAmount(it.amount, it.currency)}</td>
+              <td class="px-3 py-2">${it.try_goodie ? '🎁' : '-'}</td>
+            </tr>
+          `).join('');
+        } catch (e) {
+          meta.textContent = 'Error loading';
+          console.log('pendings', e);
+        }
+      }
+
+      loadPendings();
+      setInterval(loadPendings, 3000); // 3s
+    })();
+  </script>
+  <!-- END OF live pendings view ;-) -->
+
+
+  <!-- live orders view ;-) -->
+  <!-- <h2 class="text-2xl font-bold mt-12">Orders: </h2> -->
+  <!-- <span id="orders-meta" class="text-xs text-slate-400"></span> -->
+
+<div class="flex justify-between items-center mt-12">
+  <h2 class="text-2xl font-bold">Orders:</h2>
+  <span id="orders-meta" class="text-xs text-slate-400"></span>
+</div>
+
+  <div class="mt-4 overflow-x-auto">
     <table class="min-w-full text-sm">
       <thead class="text-left text-slate-300">
         <tr>
@@ -25,26 +186,65 @@
           <th class="py-2 pr-4">Goodie</th>
         </tr>
       </thead>
-      <tbody class="divide-y divide-white/10">
-        {% for o in orders %}
-          <tr class="
-            {% if o.status == 'PAID' %}bg-emerald-500/5{% endif %}
-            {% if o.status in ['FAILED','CANCELED'] %}bg-rose-500/5{% endif %}
-            {% if o.status == 'PAID_UNFULFILLED' %}bg-amber-500/5{% endif %}
-          ">
-            <td class="py-2 pr-4"><code>{{ o.id[:8] }}</code></td>
-            <td class="py-2 pr-4">{{ o.status }}</td>
-            <td class="py-2 pr-4">{{ o.cls }}</td>
-            <td class="py-2 pr-4">{{ o.qty }}</td>
-            <td class="py-2 pr-4">EUR {{ '%.2f' % (o.amount/100) }}</td>
-            <td class="py-2 pr-4">{{ o.paid_at_iso or '-' }}</td>
-            <td class="py-2 pr-4">{{ o.email or '-' }}</td>
-            <td class="py-2 pr-4">{{ o.ticket_code or '-' }}</td>
-            <td class="py-2 pr-4">{{ 'yes' if o.got_goodie else 'no' }}</td>
-          </tr>
-        {% endfor %}
+      <tbody id="orders-body" class="divide-y divide-white/10">
+        <!-- filled by JS -->
       </tbody>
     </table>
   </div>
+
+  <script>
+    (function () {
+      const tbody = document.getElementById('orders-body');
+
+      function rowBg(status) {
+        if (status === 'PAID') return 'bg-emerald-500/5';
+        if (status === 'PAID_UNFULFILLED') return 'bg-amber-500/5';
+        if (status === 'FAILED' || status === 'CANCELED') return 'bg-rose-500/5';
+        return '';
+      }
+      function fmtAmount(cents, currency) {
+        return `${(cents/100).toFixed(2)} ${String(currency || 'EUR').toUpperCase()}`;
+      }
+      function shortId(id) {
+        return (id || '').substring(0, 8);
+      }
+      function yesno(b) {
+        return b ? 'yes' : 'no';
+      }
+
+      function render(items, limit) {
+        tbody.innerHTML = items.map(o => `
+          <tr class="${rowBg(o.status)}">
+            <td class="py-2 pr-4"><code>${shortId(o.id)}</code></td>
+            <td class="py-2 pr-4">${o.status}</td>
+            <td class="py-2 pr-4">${o.cls}</td>
+            <td class="py-2 pr-4">${o.qty}</td>
+            <td class="py-2 pr-4">${fmtAmount(o.amount, o.currency)}</td>
+            <td class="py-2 pr-4">${o.paid_at_iso || '-'}</td>
+            <td class="py-2 pr-4">${o.email || '-'}</td>
+            <td class="py-2 pr-4">${o.ticket_code || '-'}</td>
+            <td class="py-2 pr-4">${yesno(o.got_goodie)}</td>
+          </tr>
+        `).join('');
+        document.getElementById('orders-meta').textContent = `(Showing last ${limit})`;
+      }
+
+      async function loadOrders() {
+        try {
+          const res = await fetch('/api/admin/orders?limit=200', { cache: 'no-store' });
+          const j = await res.json();
+          render(j.items || [], j.limit || 200);
+        } catch (e) {
+          // ignore transient errors; next tick will refresh
+          console.log("orders", e);
+        }
+      }
+
+      // initial + poll
+      loadOrders();
+      setInterval(loadOrders, 3000); // 3s;
+    })();
+  </script>
+  <!-- END OF live orders view ;-) -->
 </div>
 {% endblock %}
