@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+import os
+import sys
 import argparse
 import asyncio
 import base64
@@ -8,10 +10,22 @@ import json
 import random
 import re
 import time
+from datetime import datetime, timezone
 from dataclasses import dataclass, asdict
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import httpx
+
+
+def now_ts() -> float:
+    return time.time()
+
+
+def to_iso(ts: float | None) -> Optional[str]:
+    if ts is None:
+        return None
+    return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+
 
 PSID_RE = re.compile(r"/mockpay/([^/?#]+)")
 
@@ -25,6 +39,58 @@ class CheckoutResult:
     currency: str
 
 
+@dataclass
+class Summary:
+    total: int = 0
+    ok: int = 0
+    errors: int = 0
+    wall_time: float = 0.0
+    throughput: float = 0.0
+
+
+def write_csv(
+    csv: str, tag: str, concurrency: int, webhook_mode: str, succeed_rate: float,
+    checkout_summary: Summary, webhook_summary: Summary,
+    accounting_backend: str, paymentsessions_backend: str,
+    db_pool_size: int, redis_max_conn: int,
+):
+    write_header = not os.path.exists(csv)
+    now = now_ts()
+    timestamp = to_iso(now)
+
+    with open(csv, 'at') as f:
+        if write_header:
+            f.write(
+                'timestamp,phase,tag,accounting,payments,concurrency,'
+                'db_pool_size,redis_max_conn,'
+                'webhook_mode,'
+                'arg_succeed_rate,total,ok,errors,walltime,throughput'
+                '\n'
+            )
+        if checkout_summary:
+            f.write(
+                f'{timestamp},checkout,{tag},{accounting_backend},'
+                f'{paymentsessions_backend},{concurrency},'
+                f'{db_pool_size},{redis_max_conn},'
+                f'{webhook_mode},'
+                f'{succeed_rate},{checkout_summary.total},'
+                f'{checkout_summary.ok},{checkout_summary.errors},'
+                f'{checkout_summary.wall_time},{checkout_summary.throughput}'
+                '\n'
+            )
+        if webhook_summary:
+            f.write(
+                f'{timestamp},webhook,{tag},{accounting_backend},'
+                f'{paymentsessions_backend},{concurrency},'
+                f'{db_pool_size},{redis_max_conn},'
+                f'{webhook_mode},'
+                f'{succeed_rate},{webhook_summary.total},'
+                f'{webhook_summary.ok},{webhook_summary.errors},'
+                f'{webhook_summary.wall_time},{webhook_summary.throughput}'
+                '\n'
+            )
+
+
 def rand_email(i: int) -> str:
     return f"user{i}-{random.randrange(1_000_000)}@example.com"
 
@@ -35,7 +101,7 @@ def pick_class(i: int) -> str:
 
 async def phase_checkout(
         base: str, total: int, conc: int
-) -> List[CheckoutResult]:
+) -> Tuple[List[CheckoutResult], Summary]:
     results: List[CheckoutResult] = []
     errors = 0
     limits = httpx.Limits(max_connections=conc, max_keepalive_connections=conc)
@@ -82,7 +148,15 @@ async def phase_checkout(
     print("\n=== Phase 1: Checkout / Reservations ===")
     print(f"Total: {total}   OK: {ok}   ERROR: {errors}")
     print(f"Wall time: {dt:.3f}s   Throughput: {ok/dt:.1f} ops/s")
-    return results
+
+    summary = Summary(
+        total=total,
+        ok=ok,
+        errors=errors,
+        wall_time=dt,
+        throughput=ok/dt,
+    )
+    return results, summary
 
 
 def sign_mockpay(secret: str, payload_bytes: bytes) -> str:
@@ -92,7 +166,7 @@ def sign_mockpay(secret: str, payload_bytes: bytes) -> str:
 
 async def phase_reservation(
         base: str, total: int, concurrency: int
-) -> List[CheckoutResult]:
+) -> Tuple[List[CheckoutResult], Summary]:
     """
     Phase 1: create holds/orders via POST /api/checkout.
     Returns list of (order_id, psid, cls, amount, currency).
@@ -148,7 +222,14 @@ async def phase_reservation(
     print("\n=== Phase 1: Reservations (/api/checkout) ===")
     print(f"Total: {total}   OK: {ok}   ERROR: {errors}")
     print(f"Wall time: {dt:.3f}s   Throughput: {ok/dt:.1f} ops/s")
-    return results
+    summary = Summary(
+        total=total,
+        ok=ok,
+        errors=errors,
+        wall_time=dt,
+        throughput=ok/dt,
+    )
+    return results, summary
 
 
 async def phase_webhook(
@@ -184,7 +265,10 @@ async def phase_webhook(
 
         async def one(res: CheckoutResult):
             nonlocal ok, errors
-            kind = "succeeded" if (random.random() < succeed_rate) else "failed"
+            kind = (
+                    "succeeded" if (random.random() < succeed_rate)
+                    else "failed"
+            )
             try:
                 if mode == "emit":
                     r = await client.post(
@@ -235,6 +319,14 @@ async def phase_webhook(
     print(f"Mode: {mode}")
     print(f"Total: {len(sessions)}   OK: {ok}   ERROR: {errors}")
     print(f"Wall time: {dt:.3f}s   Throughput: {ok/dt:.1f} ops/s")
+    summary = Summary(
+        total=len(sessions),
+        ok=ok,
+        errors=errors,
+        wall_time=dt,
+        throughput=ok/dt,
+    )
+    return sessions, summary
 
 
 def save_sessions(path: str, sessions: List[CheckoutResult]) -> None:
@@ -275,25 +367,63 @@ async def main():
     ap.add_argument("--save",
                     help="Save sessions to JSON after checkout phase")
     ap.add_argument("--load", help="Load sessions JSON (skip checkout)")
+    ap.add_argument("--csv", help="write results to csv")
+    ap.add_argument("--tag", default='',
+                    help="tag to write into csv's tag column")
+    ap.add_argument("--accounting", choices=['pg', 'tb'],
+                    help="accounting backend used (pg|tb)")
+    ap.add_argument("--payments", choices=['pg', 'redis'],
+                    help="accounting backend used (pg|redis)")
+    ap.add_argument("--cooldown", default=0,
+                    help="cooldown time in seconds after test")
+    ap.add_argument("--redis-max-conn", type=int,
+                    help="redis max conn used in server")
+    ap.add_argument("--db-pool-size", type=int,
+                    help="db pool size used in server")
+
     args = ap.parse_args()
+
+    if not args.redis_max_conn:
+        print("need --redis-max-conn=")
+        sys.exit(1)
+
+    if not args.db_pool_size:
+        print("need --db-pool-size=")
+        sys.exit(1)
+
+    if not args.accounting:
+        print("need --accounting=pg|tb")
+        sys.exit(1)
+
+    if not args.payments:
+        print("need --payments=pg|redis")
+        sys.exit(1)
 
     sessions: List[CheckoutResult] = []
 
     if args.phase in ("both", "checkout") and not args.load:
-        sessions = await phase_checkout(
+        sessions, checkout_summary = await phase_checkout(
             args.base, args.total, args.concurrency
         )
         if args.save:
             save_sessions(args.save, sessions)
 
+    webhook_summary = None
     if args.phase in ("both", "webhook"):
         if args.load and not sessions:
             sessions = load_sessions(args.load)
         if not sessions:
             print("No sessions available. Run checkout phase or "
                   "provide --load file.")
+        if args.csv:
+            write_csv(
+                args.csv, args.tag, args.concurrency, args.webhook_mode,
+                args.succeed_rate, checkout_summary, webhook_summary,
+                args.accounting, args.payments,
+                args.db_pool_size, args.redis_max_conn,
+            )
             return
-        await phase_webhook(
+        checkouts, webhook_summary = await phase_webhook(
             base=args.base,
             sessions=sessions,
             concurrency=args.concurrency,
@@ -301,6 +431,13 @@ async def main():
             succeed_rate=args.succeed_rate,
             mock_webhook_url=args.webhook_url,
             mock_secret=args.secret,
+        )
+    if args.csv:
+        write_csv(
+            args.csv, args.tag, args.concurrency, args.webhook_mode,
+            args.succeed_rate, checkout_summary, webhook_summary,
+            args.accounting, args.payments,
+            args.db_pool_size, args.redis_max_conn,
         )
 
 if __name__ == "__main__":

@@ -7,3 +7,4 @@ demo.db-shm
 demo.db-wal
 **/__pycache__/
 data/
+**/*.csv
