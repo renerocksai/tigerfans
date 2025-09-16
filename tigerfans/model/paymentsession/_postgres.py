@@ -1,4 +1,3 @@
-# model/reservation/postgres.py
 from __future__ import annotations
 from typing import Optional, Dict, Any, List, Tuple
 from sqlalchemy import text, bindparam
@@ -69,7 +68,7 @@ async def create_schema(db_or_conn: AsyncSession | AsyncConnection):
 
 
 class PaymentSessionStore:
-    def __init__(self, *, db: AsyncSession, ttl_seconds: int) -> None:
+    def __init__(self, *, db: AsyncConnection, ttl_seconds: int) -> None:
         self.db = db
         self.ttl = ttl_seconds
 
@@ -228,3 +227,55 @@ class PaymentSessionStore:
                 await self.db.execute(stmt, {"psids": tuple(missing)})
 
         return int(total), items
+
+    # OPTIMIZED version: do both idempotency checks at once
+    async def fulfill_and_mark_event(
+            self, psid: str, idem: str | None
+    ) -> Dict[str, Optional[bool]]:
+        """
+        Semantics:
+          1) Try fulfill gate. If it already exists -> short-circuit, don't
+             touch idempotency.
+          2) If fulfill gate was set now, and evt_id is provided, mark
+             idempotency.
+
+        Returns:
+          {
+            "already_fulfilled": True  if fulfill gate already existed
+            "event_seen":        True  if idempotency key already existed,
+                                 False if it already existed
+                                 None  if not checked or not provided
+          }
+        """
+        out = {"already_fulfilled": False, "event_seen": False}
+        async with self.db.begin():  # use the existing connection/session
+            gate = (await self.db.execute(
+                text("""
+                  INSERT INTO fulfillment_gates(psid) VALUES(:psid)
+                  ON CONFLICT (psid) DO NOTHING
+                  RETURNING psid
+                """),
+                {"psid": psid},
+            )).first()
+
+            if gate is None:
+                out["already_fulfilled"] = True
+                out["event_seen"] = None  # not checked
+                return out
+
+            out["already_fulfilled"] = False
+
+            if idem:
+                idem_row = (await self.db.execute(
+                    text("""
+                      INSERT INTO idempotency_keys(key) VALUES(:k)
+                      ON CONFLICT (key) DO NOTHING
+                      RETURNING key
+                    """),
+                    {"k": idem},
+                )).first()
+                out["event_seen"] = idem_row is None
+            else:
+                out["event_seen"] = None  # not provided
+
+        return out

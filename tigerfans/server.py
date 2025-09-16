@@ -131,7 +131,7 @@ async def _db_init():
         if ACCT_BACKEND == "pg":
             await create_accounts(conn)
         if PAYSESSION_BACKEND == "pg":
-            from .model.reservation._postgres import create_schema
+            from .model.paymentsession._postgres import create_schema
             await create_schema(conn)
 
 
@@ -355,12 +355,13 @@ async def payments_webhook(
     if not ps:
         raise HTTPException(404, detail="payment session not found")
 
-    # Optional gate: if already fulfilled, short-circuit
-    if not await rs.fulfill_gate(psid):
-        return {"ok": True, "idempotent": True}
+    # Combined guard (one durable tx on PG; 1–2 RTT on Redis)
+    flags = await rs.fulfill_and_mark_event(psid, idem)
 
-    # Event-level idempotency (optional)
-    if not await rs.mark_event_seen(idem):
+    # Short-circuit exactly like before:
+    # - already_fulfilled -> skip
+    # - event_seen == True -> skip
+    if flags["already_fulfilled"] or (flags["event_seen"] is True):
         return {"ok": True, "idempotent": True}
 
     # Extract inputs from Redis (strings -> ints where needed)

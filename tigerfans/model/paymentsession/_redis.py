@@ -48,6 +48,40 @@ class PaymentSessionStore:
         ok = await self.r.set(k_fulfill(psid), "1", nx=True, ex=24*3600)
         return bool(ok)
 
+    async def fulfill_and_mark_event(
+        self, psid: str, evt_id: Optional[str]
+    ) -> Dict[str, Optional[bool]]:
+        """
+        Semantics:
+          1) Try fulfill gate. If it already exists -> short-circuit, don't
+             touch idempotency.
+          2) If fulfill gate was set now, and evt_id is provided, mark
+             idempotency.
+
+        Returns:
+          {
+            "already_fulfilled": True  if fulfill gate already existed
+            "event_seen":        True  if idempotency key already existed,
+                                 False if it already existed
+                                 None  if not checked or not provided
+          }
+        """
+        # fulfill_gate() returns True if we just set the gate
+        # (i.e., not fulfilled before)
+        fulfill_ok = await self.fulfill_gate(psid)
+        if not fulfill_ok:
+            # gate already existed -> short-circuit; don't check idempotency
+            return {"already_fulfilled": True, "event_seen": None}
+
+        # gate set now; optionally check idempotency
+        if evt_id:
+            # mark_event_seen() returns True if new (not seen),
+            # False if already seen
+            idemp_ok = await self.mark_event_seen(evt_id)
+            return {"already_fulfilled": False, "event_seen": (not idemp_ok)}
+        else:
+            return {"already_fulfilled": False, "event_seen": None}
+
     async def mark_event_seen(self, evt_id: Optional[str]) -> bool:
         if not evt_id:
             return True

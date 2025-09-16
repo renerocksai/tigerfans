@@ -1,4 +1,3 @@
-# model/reservation/__init__.py
 import os
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncConnection
