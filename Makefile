@@ -1,8 +1,16 @@
-.phony = clean, server, server-w1, server-w2, server-w3, tb, psql, caddy
+.phony = clean, server, server-w1, server-w2, server-w3, tb, psql, caddy, load-tests-server-w1, load-tests-smoketest, load-tests-print, load-tests-debug
 
 POSTGRES_USER    := devuser
 POSTGRES_PASSWORD := devpass
 POSTGRES_DB      := tigerfans
+
+# default load_test config
+LT_ENV_DIR   ?= ./load_tests
+LT_ENV_GLOB  ?= *.env
+LT_CSV       ?= load_tests.csv
+LT_LOG       ?= load_tests.log
+LT_SERVER_CMD?= make server-w1
+LT_REPEAT    ?= 3
 
 clean:
 	rm -f ./demo.db*
@@ -73,7 +81,28 @@ redis:
 	--unixsocket /data/redis.sock \
 	--unixsocketperm 777
 
-
 # use caddy as reverse proxy for https
 caddy:
 	sudo docker-compose -f docker-compose-caddy.yml up
+
+
+# we don't use tee as it would die first and cause broken stdout/sterr pipes
+# on ctrl+c
+load-tests:
+	@echo "==> Running load tests, output is being logged to $(LT_LOG)"
+	@echo "==> Use: tail -f $(LT_LOG)"
+	@find $(LT_ENV_DIR) -name '$(LT_ENV_GLOB)' | \
+	python benchctl.py --env-file=- --csv-file=$(LT_CSV) \
+	  --server-cmd='$(LT_SERVER_CMD)' --repeat=$(LT_REPEAT) \
+	>> $(LT_LOG) 2>&1
+
+load-tests-print:
+	@find $(LT_ENV_DIR) -name '*.env' -print | sort
+
+load-tests-mock:
+	@echo "==> Running mock load tests, output is being logged to $(LT_LOG)"
+	@echo "==> Use: tail -f $(LT_LOG)"
+	@find $(LT_ENV_DIR) -name '$(LT_ENV_GLOB)' | \
+	python benchctl.py --env-file=- --csv-file=$(LT_CSV) \
+	  --server-cmd='sleep 60' --repeat=$(LT_REPEAT) \
+	>> $(LT_LOG) 2>&1

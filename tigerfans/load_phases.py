@@ -61,7 +61,7 @@ def write_csv(
     with open(csv, 'at') as f:
         if write_header:
             f.write(
-                'timestamp,phase,tag,accounting,payments,concurrency,'
+                'timestamp,tag,phase,accounting,payments,concurrency,'
                 'db_pool_size,redis_max_conn,'
                 'webhook_mode,'
                 'arg_succeed_rate,total,ok,errors,walltime,throughput'
@@ -69,7 +69,7 @@ def write_csv(
             )
         if checkout_summary:
             f.write(
-                f'{timestamp},checkout,{tag},{accounting_backend},'
+                f'{tag},{timestamp},checkout,{accounting_backend},'
                 f'{paymentsessions_backend},{concurrency},'
                 f'{db_pool_size},{redis_max_conn},'
                 f'{webhook_mode},'
@@ -80,7 +80,7 @@ def write_csv(
             )
         if webhook_summary:
             f.write(
-                f'{timestamp},webhook,{tag},{accounting_backend},'
+                f'{tag},{timestamp},webhook,{accounting_backend},'
                 f'{paymentsessions_backend},{concurrency},'
                 f'{db_pool_size},{redis_max_conn},'
                 f'{webhook_mode},'
@@ -162,74 +162,6 @@ async def phase_checkout(
 def sign_mockpay(secret: str, payload_bytes: bytes) -> str:
     mac = hmac.new(secret.encode(), payload_bytes, hashlib.sha256).digest()
     return base64.b64encode(mac).decode()
-
-
-async def phase_reservation(
-        base: str, total: int, concurrency: int
-) -> Tuple[List[CheckoutResult], Summary]:
-    """
-    Phase 1: create holds/orders via POST /api/checkout.
-    Returns list of (order_id, psid, cls, amount, currency).
-    """
-    results: List[CheckoutResult] = []
-    errors = 0
-
-    async with httpx.AsyncClient(
-        base_url=base, timeout=10.0,
-        limits=httpx.Limits(
-            max_connections=concurrency,
-            max_keepalive_connections=concurrency
-        )
-    ) as client:
-        async def one(i: int):
-            nonlocal errors
-            payload = {"cls": pick_class(i), "customer_email": rand_email(i)}
-            try:
-                r = await client.post("/api/checkout", json=payload)
-                r.raise_for_status()
-                j = r.json()
-                order_id = j["order_id"]
-                redirect_url = j["redirect_url"]
-                m = PSID_RE.search(redirect_url or "")
-                if not m:
-                    errors += 1
-                    return
-                psid = m.group(1)
-                results.append(
-                    CheckoutResult(
-                        order_id=order_id,
-                        psid=psid,
-                        cls=payload["cls"],
-                        amount=j["amount"],
-                        currency=j["currency"],
-                    )
-                )
-            except Exception:
-                errors += 1
-
-        t0 = time.perf_counter()
-        # batch in chunks of `concurrency`
-        for start in range(0, total, concurrency):
-            batch = [
-                one(i) for i in range(
-                    start, min(start + concurrency, total)
-                )
-            ]
-            await asyncio.gather(*batch)
-        dt = time.perf_counter() - t0
-
-    ok = len(results)
-    print("\n=== Phase 1: Reservations (/api/checkout) ===")
-    print(f"Total: {total}   OK: {ok}   ERROR: {errors}")
-    print(f"Wall time: {dt:.3f}s   Throughput: {ok/dt:.1f} ops/s")
-    summary = Summary(
-        total=total,
-        ok=ok,
-        errors=errors,
-        wall_time=dt,
-        throughput=ok/dt,
-    )
-    return results, summary
 
 
 async def phase_webhook(
@@ -370,34 +302,16 @@ async def main():
     ap.add_argument("--csv", help="write results to csv")
     ap.add_argument("--tag", default='',
                     help="tag to write into csv's tag column")
-    ap.add_argument("--accounting", choices=['pg', 'tb'],
+    ap.add_argument("--accounting", choices=['pg', 'tb'], required=True,
                     help="accounting backend used (pg|tb)")
-    ap.add_argument("--payments", choices=['pg', 'redis'],
+    ap.add_argument("--payments", choices=['pg', 'redis'], required=True,
                     help="accounting backend used (pg|redis)")
-    ap.add_argument("--cooldown", default=0,
-                    help="cooldown time in seconds after test")
-    ap.add_argument("--redis-max-conn", type=int,
+    ap.add_argument("--redis-max-conn", type=int, required=True,
                     help="redis max conn used in server")
-    ap.add_argument("--db-pool-size", type=int,
+    ap.add_argument("--db-pool-size", type=int, required=True,
                     help="db pool size used in server")
 
     args = ap.parse_args()
-
-    if not args.redis_max_conn:
-        print("need --redis-max-conn=")
-        sys.exit(1)
-
-    if not args.db_pool_size:
-        print("need --db-pool-size=")
-        sys.exit(1)
-
-    if not args.accounting:
-        print("need --accounting=pg|tb")
-        sys.exit(1)
-
-    if not args.payments:
-        print("need --payments=pg|redis")
-        sys.exit(1)
 
     sessions: List[CheckoutResult] = []
 
@@ -412,17 +326,6 @@ async def main():
     if args.phase in ("both", "webhook"):
         if args.load and not sessions:
             sessions = load_sessions(args.load)
-        if not sessions:
-            print("No sessions available. Run checkout phase or "
-                  "provide --load file.")
-        if args.csv:
-            write_csv(
-                args.csv, args.tag, args.concurrency, args.webhook_mode,
-                args.succeed_rate, checkout_summary, webhook_summary,
-                args.accounting, args.payments,
-                args.db_pool_size, args.redis_max_conn,
-            )
-            return
         checkouts, webhook_summary = await phase_webhook(
             base=args.base,
             sessions=sessions,
@@ -432,6 +335,10 @@ async def main():
             mock_webhook_url=args.webhook_url,
             mock_secret=args.secret,
         )
+        # print it after trying for nicer output in logs
+        if not sessions:
+            print("No sessions available. Run checkout phase or "
+                  "provide --load file.")
     if args.csv:
         write_csv(
             args.csv, args.tag, args.concurrency, args.webhook_mode,

@@ -8,3 +8,4 @@ demo.db-wal
 **/__pycache__/
 data/
 **/*.csv
+**/*.log
