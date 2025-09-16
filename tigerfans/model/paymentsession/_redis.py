@@ -14,7 +14,7 @@ def k_idemp(evt: str) -> str: return f"idemp:{evt}"
 PENDING_INDEX = "pendings"  # optional
 
 
-class ReservationStore:
+class PaymentSessionStore:
     def __init__(self, r: redis.Redis, ttl_seconds: int) -> None:
         self.r = r
         self.ttl = ttl_seconds

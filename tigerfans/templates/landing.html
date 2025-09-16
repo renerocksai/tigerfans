@@ -39,7 +39,7 @@
             </div>
             <div class="p-4 squircle bg-slate-900 border border-white/10">
               <p class="text-xs text-slate-400">reservations store</p>
-              {% if RESV_BACKEND == 'redis' %}
+              {% if PAYSESSION_BACKEND == 'redis' %}
               <p class="text-2xl font-bold"><a href="https://redis.io" target="_blank">Redis</a></p>
               {% else %}
               <p class="text-2xl font-bold"><a href="https://www.postgresql.org/" target="_blank">PostgreSQL</a></p>

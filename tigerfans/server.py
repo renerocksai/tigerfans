@@ -17,8 +17,8 @@ from .model.order import Base, Order
 from .model import accounting
 from .model.accounting import TicketAmount_first_n, BACKEND as ACCT_BACKEND
 from .model.accounting import create_accounts, initial_transfers
-from .model.reservation import (
-        ReservationStore, new_store, BACKEND as RESV_BACKEND
+from .model.paymentsession import (
+        PaymentSessionStore, new_store, BACKEND as PAYSESSION_BACKEND
 )
 from .mockpay import PaymentAdapter, MockPay, MOCK_SECRET
 
@@ -74,7 +74,7 @@ async def get_db() -> AsyncSession:
 adapter: PaymentAdapter = MockPay()
 
 app = FastAPI(
-    title="TigerFans — Redis Reservations + (TB/PG) Accounting",
+    title="TigerFans",
     default_response_class=ORJSONResponse,
 )
 app.mount("/static", StaticFiles(directory="tigerfans/static"), name="static")
@@ -90,8 +90,8 @@ def get_tb_client() -> tb.ClientAsync:
     return client
 
 
-async def reservations() -> ReservationStore:
-    if RESV_BACKEND == 'pg':
+async def paymentsessions() -> PaymentSessionStore:
+    if PAYSESSION_BACKEND == 'pg':
         conn: AsyncConnection
         async with engine.connect() as conn:
             yield new_store(db=conn)
@@ -115,10 +115,10 @@ async def _say_hello():
     print('\n' * 3)
     print('=' * 50)
     A = 'PostgreSQL' if ACCT_BACKEND == 'pg' else 'Tigerbeetle'
-    R = 'PostgreSQL' if RESV_BACKEND == 'pg' else 'Redis'
+    R = 'PostgreSQL' if PAYSESSION_BACKEND == 'pg' else 'Redis'
     print('TigerFans is starting up...')
     print(f'   - Accounting   Backend: {A}')
-    print(f'   - Reservations Backend: {R}')
+    print(f'   - Payment Sessions Backend: {R}')
     print('=' * 50)
     print('\n' * 3)
 
@@ -130,7 +130,7 @@ async def _db_init():
         await conn.run_sync(Base.metadata.create_all)
         if ACCT_BACKEND == "pg":
             await create_accounts(conn)
-        if RESV_BACKEND == "pg":
+        if PAYSESSION_BACKEND == "pg":
             from .model.reservation._postgres import create_schema
             await create_schema(conn)
 
@@ -147,7 +147,7 @@ async def _http_client_start():
 
 @app.on_event("startup")
 async def _redis_start():
-    if RESV_BACKEND != 'pg':
+    if PAYSESSION_BACKEND != 'pg':
         REDIS_URL = os.getenv("REDIS_URL", "redis://127.0.0.1:6379")
         app.state.redis = redis.from_url(
             REDIS_URL,
@@ -224,7 +224,7 @@ async def landing_page(request: Request):
             "conf_date": "Dec 3–4, 2025",
             "conf_tagline":
                 "A conference for people who love fast, correct systems.",
-            "RESV_BACKEND": RESV_BACKEND,
+            "PAYSESSION_BACKEND": PAYSESSION_BACKEND,
             "ACCT_BACKEND": ACCT_BACKEND,
         },
     )
@@ -244,9 +244,9 @@ async def demo_checkout_page(request: Request, status: Optional[str] = None,
 
 @app.post("/api/checkout")
 async def create_checkout(
-    payload: dict, db: SessionAsync = Depends(get_db),
-    client=Depends(accounting_client),
-    rs=Depends(reservations),
+    payload: dict,
+    ac: tb.ClientAsync | AsyncSession = Depends(accounting_client),
+    rs: PaymentSessionStore = Depends(paymentsessions),
 ):
     cls = payload.get("cls")
     # Enforce single-ticket policy
@@ -264,14 +264,14 @@ async def create_checkout(
         raise HTTPException(400, detail="invalid ticket class")
 
     tb_transfer_id, goodie_tb_transfer_id, ticket_ok, goodie_ok = (
-            await accounting.hold_tickets(client, cls, qty,
+            await accounting.hold_tickets(ac, cls, qty,
                                           RESERVATION_TTL_SECONDS)
     )
     if not ticket_ok:
         if goodie_ok:
             # cancel the goodie ticket reservation so it doesn't need to
             # time out
-            await accounting.cancel_only_goodie(client, goodie_tb_transfer_id)
+            await accounting.cancel_only_goodie(ac, goodie_tb_transfer_id)
         raise RuntimeError("Sold Out")
 
     amount = TICKET_CLASSES[cls]["price"] * qty
@@ -305,7 +305,7 @@ async def create_checkout(
 # API: Order status (polled by success page)
 # ----------------------------
 @app.get("/api/orders/{order_id}")
-async def get_order(order_id: str, db: SessionAsync = Depends(get_db)):
+async def get_order(order_id: str, db: AsyncSession = Depends(get_db)):
     # raw sql -> sqlalchemy won't start an implicit transaction
     result = await db.execute(
         text("""
@@ -338,9 +338,9 @@ async def get_order(order_id: str, db: SessionAsync = Depends(get_db)):
 @app.post("/payments/webhook")
 async def payments_webhook(
     request: Request,
-    db: SessionAsync = Depends(get_db),
-    client: "tb.ClientSync" = Depends(accounting_client),
-    rs=Depends(reservations),
+    db: AsyncSession = Depends(get_db),
+    ac: tb.ClientAsync | AsyncSession = Depends(accounting_client),
+    rs: PaymentSessionStore = Depends(paymentsessions),
 ):
     payload = await request.body()
     headers = dict(request.headers)
@@ -380,7 +380,7 @@ async def payments_webhook(
 
     if kind == "succeeded":
         gets_ticket, gets_goodie = await accounting.commit_order(
-            client,
+            ac,
             tb_transfer_id,
             goodie_tb_transfer_id,
             cls,
@@ -392,16 +392,16 @@ async def payments_webhook(
         if not gets_ticket:
             (
                 tb2, goodie2, gets_ticket2, gets_goodie2
-            ) = await accounting.book_immediately(client, cls, qty)
+            ) = await accounting.book_immediately(ac, cls, qty)
             if gets_ticket2:
                 gets_ticket = True
                 gets_goodie = gets_goodie or gets_goodie2
-                # (Optional) We *could* add a method to ReservationStore to
+                # (Optional) We *could* add a method to PaymentSessionStore to
                 # update these IDs in Redis, but it's not required anymore
                 # since we’re about to persist to Postgres.
     elif kind in ("failed", "canceled"):
         await accounting.cancel_order(
-            client, tb_transfer_id, goodie_tb_transfer_id, cls, qty
+            ac, tb_transfer_id, goodie_tb_transfer_id, cls, qty
         )
         # No durable write needed for failure/cancel (by design of the hybrid)
         # but we don't forget to flush!
@@ -447,14 +447,16 @@ async def payments_webhook(
 
 
 @app.get("/api/inventory")
-async def get_inventory(client=Depends(accounting_client)):
+async def get_inventory(
+    client: tb.ClientAsync | AsyncSession = Depends(accounting_client),
+):
     return await accounting.compute_inventory(client)
 
 
 @app.get("/api/pending")
 async def api_pending(
     limit: int = 100,
-    rs=Depends(reservations),
+    rs: PaymentSessionStore = Depends(paymentsessions),
 ):
     total, items = await rs.get_recent_payment_sessions(limit=limit)
     return {"items": items, "enabled": True, 'limit': limit, 'total': total}
@@ -462,7 +464,9 @@ async def api_pending(
 
 # ---- Admin JSON feed: goodies counter ----
 @app.get("/api/admin/goodies")
-async def api_admin_goodies(client=Depends(accounting_client)):
+async def api_admin_goodies(
+    client: tb.ClientAsync | AsyncSession = Depends(accounting_client),
+):
     used = await accounting.count_goodies(client)
     return {
         "used": int(used),
@@ -472,7 +476,7 @@ async def api_admin_goodies(client=Depends(accounting_client)):
 
 @app.get("/api/admin/orders")
 async def api_admin_orders(limit: int = 200,
-                           db: SessionAsync = Depends(get_db)):
+                           db: AsyncSession = Depends(get_db)):
     result = await db.execute(
         text("""
             SELECT id, status, cls, qty, amount, currency, paid_at,
@@ -511,8 +515,8 @@ async def api_admin_orders(limit: int = 200,
 @app.get("/mockpay/{psid}", response_class=HTMLResponse)
 async def mockpay_screen(
     request: Request, psid: str,
-    db: SessionAsync = Depends(get_db),
-    rs=Depends(reservations),
+    db: AsyncSession = Depends(get_db),
+    rs: PaymentSessionStore = Depends(paymentsessions),
 ):
     ps = await rs.get_payment_session(psid)
     if not ps:
@@ -531,8 +535,8 @@ async def mockpay_screen(
 @app.post("/mockpay/{psid}/emit")
 async def mockpay_emit(
     psid: str, request: Request,
-    db: SessionAsync = Depends(get_db),
-    rs=Depends(reservations),
+    db: AsyncSession = Depends(get_db),
+    rs: PaymentSessionStore = Depends(paymentsessions),
 ):
     form = await request.form()
     kind = form.get("t")  # succeeded|failed|canceled
@@ -655,8 +659,11 @@ async def admin_logout(request: Request):
 
 # Admin page
 @app.get("/admin", response_class=HTMLResponse)
-async def admin_page(request: Request, db: SessionAsync = Depends(get_db),
-                     client: "tb.ClientSync" = Depends(accounting_client)):
+async def admin_page(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    client: tb.ClientAsync | AsyncSession = Depends(accounting_client),
+):
     if not is_admin(request):
         dest = request.url.path
         return RedirectResponse(

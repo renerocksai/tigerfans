@@ -68,7 +68,7 @@ async def create_schema(db_or_conn: AsyncSession | AsyncConnection):
     await exec_(text(SQL_CREATE_IDX_PS_HOT_CREATED_AT))
 
 
-class ReservationStore:
+class PaymentSessionStore:
     def __init__(self, *, db: AsyncSession, ttl_seconds: int) -> None:
         self.db = db
         self.ttl = ttl_seconds
