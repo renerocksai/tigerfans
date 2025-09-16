@@ -21,8 +21,8 @@ def make_async_engine(database_url: str):
 
     if db_url.startswith("postgresql+asyncpg://"):
         kw.update(
-            pool_size=int(os.getenv("DB_POOL_SIZE", "5")),
-            max_overflow=int(os.getenv("DB_MAX_OVERFLOW", "5")),
+            pool_size=int(os.getenv("DB_POOL_SIZE", "10")),
+            max_overflow=int(os.getenv("DB_MAX_OVERFLOW", "10")),
             pool_timeout=int(os.getenv("DB_POOL_TIMEOUT", "30")),
         )
 
