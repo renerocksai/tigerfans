@@ -1,7 +1,7 @@
 import os
 import tigerbeetle as tb
 from typing import Tuple
-from ..helpers import now_ts, to_iso
+from ...helpers import now_ts, to_iso
 
 # Config
 TicketAmount_Class_A = 5_000_000

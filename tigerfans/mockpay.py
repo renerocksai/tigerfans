@@ -8,8 +8,8 @@ import hmac
 import hashlib
 import base64
 import json
-from .model.db import PaymentSession, Order
-from .helpers import now_ts
+from .model.order import Order
+# from .helpers import now_ts
 
 MOCK_SECRET = os.environ.get("MOCK_SECRET", "supersecret")
 
@@ -51,22 +51,31 @@ class PaymentAdapter(ABC):
 # ----------------------------
 class MockPay(PaymentAdapter):
 
+    ###
+    #
     # we don't use that anymore. to save one DB commit, create the session in
     # the endpoint
+    #
+    # async def create_session(
+    #         self, db: AsyncSession, order: Order, meta: dict
+    # ) -> CreateSessionResult:
+    #     psid = f"mock_{uuid.uuid4().hex}"
+    #     db.add(PaymentSession(
+    #         id=psid,
+    #         order_id=order.id,
+    #         amount=order.amount,
+    #         currency=order.currency,
+    #         created_at=now_ts(),
+    #     ))
+    #     await db.commit()
+    #     redirect_url = f"/mockpay/{psid}"
+    #     return {"payment_session_id": psid, "redirect_url": redirect_url}
+    ####
+
     async def create_session(
             self, db: AsyncSession, order: Order, meta: dict
     ) -> CreateSessionResult:
-        psid = f"mock_{uuid.uuid4().hex}"
-        db.add(PaymentSession(
-            id=psid,
-            order_id=order.id,
-            amount=order.amount,
-            currency=order.currency,
-            created_at=now_ts(),
-        ))
-        await db.commit()
-        redirect_url = f"/mockpay/{psid}"
-        return {"payment_session_id": psid, "redirect_url": redirect_url}
+        pass
 
     # we use that instead
     def create_session_id_and_url(self) -> CreateSessionResult:

@@ -1,21 +1,7 @@
-"""
-Ticketing Demo  (FastAPI + MockPay adapter + TigerBeetle + PostgreSQL + Redis)
-------------------------------------------------------------------------------
-Goals:
-- Two ticket classes: A (premium) and B (standard)
-- First 100 successful buyers receive a goodie
-  (via TigerBeetle transfer from a pool)
-- Mock payment provider with redirect + webhook flow
-- Clean adapter boundary so we can later swap in Stripe
-- **SQLite instead of in-memory** so the demo persists and survives restarts
-    - has been superseeded by PostgreSQL and Redis
-
-Run locally:
-  see the Makefile
-"""
 from __future__ import annotations
 import sys
 
+import httpx
 import base64
 import hashlib
 import hmac
@@ -26,7 +12,16 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-import httpx
+from .infra.sql import make_async_engine
+from .model.order import Base, Order
+from .model import accounting
+from .model.accounting import TicketAmount_first_n, BACKEND as ACCT_BACKEND
+from .model.accounting import create_accounts, initial_transfers
+from .model.reservation import (
+        ReservationStore, new_store, BACKEND as RESV_BACKEND
+)
+from .mockpay import PaymentAdapter, MockPay, MOCK_SECRET
+
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, ORJSONResponse
 from fastapi import Form
@@ -34,26 +29,13 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 
-from .model import tigerbeetledb
-from tigerfans.model.reservations import ReservationStore
-
-from sqlalchemy.ext.asyncio import AsyncSession
-
+from sqlalchemy.ext.asyncio import AsyncSession, AsyncConnection
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.status import HTTP_303_SEE_OTHER
 
-from sqlalchemy import (
-    text,
-    select,
-    join,
-)
+from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
-from .model.db import (
-    Base, Order, PaymentSession, WebhookEventSeen, FulfillmentKey,
-    make_async_engine
-)
 from .helpers import now_ts, to_iso, is_valid_email, ct_equal
-from .mockpay import PaymentAdapter, MockPay, MOCK_SECRET
 
 import tigerbeetle as tb
 import redis.asyncio as redis
@@ -74,7 +56,7 @@ if DATABASE_URL is None:
     sys.exit(1)
 
 TICKET_CLASSES = {"A": {"price": 6500}, "B": {"price": 3500}}  # cents (EUR)
-GOODIE_LIMIT_PER_CLASS = tigerbeetledb.TicketAmount_first_n
+GOODIE_LIMIT_PER_CLASS = TicketAmount_first_n
 RESERVATION_TTL_SECONDS = 5 * 60
 
 SESSION_SECRET = os.environ.get("SESSION_SECRET", "dev-secret-change-me")
@@ -82,9 +64,6 @@ ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "supasecret")
 
 
-# ----------------------------
-# Database setup
-# ----------------------------
 engine, SessionAsync = make_async_engine(DATABASE_URL)
 
 
@@ -92,72 +71,104 @@ async def get_db() -> AsyncSession:
     async with SessionAsync() as session:
         yield session
 
-
 adapter: PaymentAdapter = MockPay()
 
-
-# ----------------------------
-# FastAPI app
-# ----------------------------
-
 app = FastAPI(
-    title="Ticketing Demo with MockPay & TigerBeetle (SQLite/PostgreSQL)",
+    title="TigerFans — Redis Reservations + (TB/PG) Accounting",
     default_response_class=ORJSONResponse,
 )
 app.mount("/static", StaticFiles(directory="tigerfans/static"), name="static")
 app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET)
 
 
-def reservations() -> ReservationStore:
-    rs = getattr(app.state, "resv", None)
-    if not rs:
-        raise RuntimeError("ReservationStore not initialized")
-    return rs
+def get_tb_client() -> tb.ClientAsync:
+    if ACCT_BACKEND != "tb":
+        raise RuntimeError("TigerBeetle backend not enabled")
+    client = getattr(app.state, "tb_client", None)
+    if client is None:
+        raise RuntimeError("TigerBeetle client not initialized")
+    return client
+
+
+async def reservations() -> ReservationStore:
+    if RESV_BACKEND == 'pg':
+        conn: AsyncConnection
+        async with engine.connect() as conn:
+            yield new_store(db=conn)
+    else:
+        yield new_store(r=app.state.redis)
+
+
+async def accounting_client() -> tb.ClientAsync | AsyncSession:
+    if ACCT_BACKEND == 'pg':
+        async with SessionAsync() as session:
+            yield session
+    else:
+        yield get_tb_client()
 
 
 # ---
 # startup / shutdown
 # ---
 @app.on_event("startup")
-async def _tb_start():
-    # env or defaults; adjust cluster_id/address as needed
-    addr = os.getenv("TB_ADDRESS", "3000")
-    cluster_id = int(os.getenv("TB_CLUSTER_ID", "0"))
-    # create once per process; keep it on app.state
-    client = tb.ClientAsync(cluster_id=cluster_id, replica_addresses=addr)
-    app.state.tb_client = client
-    if await tigerbeetledb.create_accounts(client):
-        await tigerbeetledb.initial_transfers(client)
+async def _say_hello():
+    print('\n' * 3)
+    print('=' * 50)
+    A = 'PostgreSQL' if ACCT_BACKEND == 'pg' else 'Tigerbeetle'
+    R = 'PostgreSQL' if RESV_BACKEND == 'pg' else 'Redis'
+    print('TigerFans is starting up...')
+    print(f'   - Accounting   Backend: {A}')
+    print(f'   - Reservations Backend: {R}')
+    print('=' * 50)
+    print('\n' * 3)
 
 
 @app.on_event("startup")
-async def init_db():
+async def _db_init():
+    # Create SQL tables for Orders
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        if ACCT_BACKEND == "pg":
+            await create_accounts(conn)
+        if RESV_BACKEND == "pg":
+            from .model.reservation._postgres import create_schema
+            await create_schema(conn)
 
 
 @app.on_event("startup")
 async def _http_client_start():
     app.state.http = httpx.AsyncClient(
         timeout=5.0,
-        limits=httpx.Limits(max_connections=512, max_keepalive_connections=512)
+        limits=httpx.Limits(
+            max_connections=512, max_keepalive_connections=512
+        ),
     )
 
 
 @app.on_event("startup")
 async def _redis_start():
-    REDIS_URL = os.getenv("REDIS_URL", "redis://127.0.0.1:6379")
-    app.state.redis = redis.from_url(
-        REDIS_URL,
-        decode_responses=True,
-        max_connections=int(os.getenv("REDIS_MAX_CONN", "512")),
-        socket_timeout=2.0,
-        socket_connect_timeout=2.0,
-        retry_on_timeout=True,
-    )
-    app.state.resv = ReservationStore(
-        app.state.redis, ttl_seconds=RESERVATION_TTL_SECONDS
-    )
+    if RESV_BACKEND != 'pg':
+        REDIS_URL = os.getenv("REDIS_URL", "redis://127.0.0.1:6379")
+        app.state.redis = redis.from_url(
+            REDIS_URL,
+            decode_responses=True,
+            max_connections=int(os.getenv("REDIS_MAX_CONN", "512")),
+            socket_timeout=2.0,
+            socket_connect_timeout=2.0,
+            retry_on_timeout=True,
+        )
+
+
+@app.on_event("startup")
+async def _accounting_start():
+    # Only spin up TigerBeetle if the accounting backend is TB
+    if ACCT_BACKEND == "tb":
+        addr = os.getenv("TB_ADDRESS", "3000")
+        cluster_id = int(os.getenv("TB_CLUSTER_ID", "0"))
+        client = tb.ClientAsync(cluster_id=cluster_id, replica_addresses=addr)
+        app.state.tb_client = client
+        if await create_accounts(client):
+            await initial_transfers(client)
 
 
 @app.on_event("shutdown")
@@ -166,6 +177,15 @@ async def _http_client_stop():
     if http is not None:
         await http.aclose()
         app.state.http = None
+
+
+@app.on_event("shutdown")
+async def _redis_stop():
+    r = getattr(app.state, "redis", None)
+    if r is not None:
+        # optional: close pool explicitly
+        await r.close()
+        app.state.redis = None
 
 
 @app.on_event("shutdown")
@@ -179,14 +199,6 @@ async def _tb_stop():
 # ----------------------------
 # Helpers
 # ----------------------------
-def get_tb_client() -> "tb.ClientSync":
-    client = getattr(app.state, "tb_client", None)
-    if client is None:
-        # Shouldn't happen after startup, but be explicit
-        raise RuntimeError("TigerBeetle client not initialized")
-    return client
-
-
 def is_admin(request: Request) -> bool:
     return bool(request.session.get("admin_user"))
 
@@ -212,6 +224,8 @@ async def landing_page(request: Request):
             "conf_date": "Dec 3–4, 2025",
             "conf_tagline":
                 "A conference for people who love fast, correct systems.",
+            "RESV_BACKEND": RESV_BACKEND,
+            "ACCT_BACKEND": ACCT_BACKEND,
         },
     )
 
@@ -229,8 +243,11 @@ async def demo_checkout_page(request: Request, status: Optional[str] = None,
 
 
 @app.post("/api/checkout")
-async def create_checkout(payload: dict, db: SessionAsync = Depends(get_db),
-                          client: "tb.ClientSync" = Depends(get_tb_client)):
+async def create_checkout(
+    payload: dict, db: SessionAsync = Depends(get_db),
+    client=Depends(accounting_client),
+    rs=Depends(reservations),
+):
     cls = payload.get("cls")
     # Enforce single-ticket policy
     qty = 1
@@ -247,15 +264,14 @@ async def create_checkout(payload: dict, db: SessionAsync = Depends(get_db),
         raise HTTPException(400, detail="invalid ticket class")
 
     tb_transfer_id, goodie_tb_transfer_id, ticket_ok, goodie_ok = (
-            await tigerbeetledb.hold_tickets(client, cls, qty,
-                                             RESERVATION_TTL_SECONDS)
+            await accounting.hold_tickets(client, cls, qty,
+                                          RESERVATION_TTL_SECONDS)
     )
     if not ticket_ok:
         if goodie_ok:
             # cancel the goodie ticket reservation so it doesn't need to
             # time out
-            await tigerbeetledb.cancel_only_goodie(client,
-                                                   goodie_tb_transfer_id)
+            await accounting.cancel_only_goodie(client, goodie_tb_transfer_id)
         raise RuntimeError("Sold Out")
 
     amount = TICKET_CLASSES[cls]["price"] * qty
@@ -264,7 +280,6 @@ async def create_checkout(payload: dict, db: SessionAsync = Depends(get_db),
     order_id = uuid.uuid4().hex
     currency = "eur"
 
-    rs = reservations()
     await rs.save_payment_session(psid, {
         "order_id": order_id,
         "cls": cls,
@@ -324,7 +339,8 @@ async def get_order(order_id: str, db: SessionAsync = Depends(get_db)):
 async def payments_webhook(
     request: Request,
     db: SessionAsync = Depends(get_db),
-    client: "tb.ClientSync" = Depends(get_tb_client),
+    client: "tb.ClientSync" = Depends(accounting_client),
+    rs=Depends(reservations),
 ):
     payload = await request.body()
     headers = dict(request.headers)
@@ -335,7 +351,6 @@ async def payments_webhook(
     if not psid:
         raise HTTPException(400, detail="missing payment_session_id")
 
-    rs = reservations()
     ps = await rs.get_payment_session(psid)
     if not ps:
         raise HTTPException(404, detail="payment session not found")
@@ -364,7 +379,7 @@ async def payments_webhook(
     gets_goodie = False
 
     if kind == "succeeded":
-        gets_ticket, gets_goodie = await tigerbeetledb.commit_order(
+        gets_ticket, gets_goodie = await accounting.commit_order(
             client,
             tb_transfer_id,
             goodie_tb_transfer_id,
@@ -377,7 +392,7 @@ async def payments_webhook(
         if not gets_ticket:
             (
                 tb2, goodie2, gets_ticket2, gets_goodie2
-            ) = await tigerbeetledb.book_immediately(client, cls, qty)
+            ) = await accounting.book_immediately(client, cls, qty)
             if gets_ticket2:
                 gets_ticket = True
                 gets_goodie = gets_goodie or gets_goodie2
@@ -385,7 +400,7 @@ async def payments_webhook(
                 # update these IDs in Redis, but it's not required anymore
                 # since we’re about to persist to Postgres.
     elif kind in ("failed", "canceled"):
-        await tigerbeetledb.cancel_order(
+        await accounting.cancel_order(
             client, tb_transfer_id, goodie_tb_transfer_id, cls, qty
         )
         # No durable write needed for failure/cancel (by design of the hybrid)
@@ -432,57 +447,26 @@ async def payments_webhook(
 
 
 @app.get("/api/inventory")
-async def get_inventory(client: "tb.ClientSync" = Depends(get_tb_client)):
-    return await tigerbeetledb.compute_inventory(client)
+async def get_inventory(client=Depends(accounting_client)):
+    return await accounting.compute_inventory(client)
 
 
 @app.get("/api/pending")
-async def api_pending(limit: int = 100):
-    rs = reservations()
-    total = await rs.r.zcard(rs.PENDING_INDEX)
-    psids = await rs.list_recent_psids(limit=limit)
-
-    # Pipeline to fetch all payment-session hashes
-    pipe = rs.r.pipeline()
-    for psid in psids:
-        pipe.hgetall(f"ps:{psid}")
-    rows = await pipe.execute()
-
-    now = time.time()
-    items = []
-    for psid, h in zip(psids, rows):
-        if not h:
-            await rs.remove_pending(psid)
-            continue
-
-        try:
-            created = float(h.get("created_at", "0"))
-        except ValueError:
-            created = 0.0
-        items.append({
-            "psid": psid,
-            "created_at": created,
-            "age_ms": int(max(0.0, now - created) * 1000),
-            "order_id": h.get("order_id", ""),
-            "cls": h.get("cls", ""),
-            "qty": int(h.get("qty", "1")),
-            "email": h.get("customer_email", h.get("email", "")),
-            "amount": int(h.get("amount", "0")),
-            "currency": h.get("currency", "eur"),
-            "try_goodie": (h.get("try_goodie") == "1"),
-            "status": "PENDING",
-        })
-
+async def api_pending(
+    limit: int = 100,
+    rs=Depends(reservations),
+):
+    total, items = await rs.get_recent_payment_sessions(limit=limit)
     return {"items": items, "enabled": True, 'limit': limit, 'total': total}
 
 
 # ---- Admin JSON feed: goodies counter ----
 @app.get("/api/admin/goodies")
-async def api_admin_goodies(client: "tb.ClientAsync" = Depends(get_tb_client)):
-    used = await tigerbeetledb.count_goodies(client)
+async def api_admin_goodies(client=Depends(accounting_client)):
+    used = await accounting.count_goodies(client)
     return {
         "used": int(used),
-        "limit": int(tigerbeetledb.TicketAmount_first_n),
+        "limit": int(TicketAmount_first_n),
     }
 
 
@@ -525,9 +509,11 @@ async def api_admin_orders(limit: int = 200,
 # ----------------------------
 # MockPay
 @app.get("/mockpay/{psid}", response_class=HTMLResponse)
-async def mockpay_screen(request: Request, psid: str,
-                         db: SessionAsync = Depends(get_db)):
-    rs = reservations()
+async def mockpay_screen(
+    request: Request, psid: str,
+    db: SessionAsync = Depends(get_db),
+    rs=Depends(reservations),
+):
     ps = await rs.get_payment_session(psid)
     if not ps:
         raise HTTPException(404, "payment session not found")
@@ -543,19 +529,20 @@ async def mockpay_screen(request: Request, psid: str,
 
 
 @app.post("/mockpay/{psid}/emit")
-async def mockpay_emit(psid: str, request: Request,
-                       db: SessionAsync = Depends(get_db)):
+async def mockpay_emit(
+    psid: str, request: Request,
+    db: SessionAsync = Depends(get_db),
+    rs=Depends(reservations),
+):
     form = await request.form()
     kind = form.get("t")  # succeeded|failed|canceled
     if kind not in {"succeeded", "failed", "canceled"}:
         raise HTTPException(400, detail="invalid kind")
 
-    rs = reservations()
     ps = await rs.get_payment_session(psid)
     if not ps:
         raise HTTPException(404, "payment session not found")
 
-    rs = reservations()
     session = await rs.get_payment_session(psid)
     if not session:
         raise HTTPException(404, detail="payment session not found")
@@ -669,7 +656,7 @@ async def admin_logout(request: Request):
 # Admin page
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_page(request: Request, db: SessionAsync = Depends(get_db),
-                     client: "tb.ClientSync" = Depends(get_tb_client)):
+                     client: "tb.ClientSync" = Depends(accounting_client)):
     if not is_admin(request):
         dest = request.url.path
         return RedirectResponse(
@@ -677,13 +664,13 @@ async def admin_page(request: Request, db: SessionAsync = Depends(get_db),
             status_code=307
         )
 
-    goodies_count = await tigerbeetledb.count_goodies(client)
+    goodies_count = await accounting.count_goodies(client)
     return templates.TemplateResponse(
         "admin.html",
         {
             "request": request,
             "goodies": goodies_count,
-            "goodie_limit": tigerbeetledb.TicketAmount_first_n,
+            "goodie_limit": TicketAmount_first_n,
             "site_name": "TigerFans",
         }
     )
