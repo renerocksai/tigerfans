@@ -1,4 +1,4 @@
-.phony = clean, server-w2, server-w3, tb, psql, caddy
+.phony = clean, server, server-w1, server-w2, server-w3, tb, psql, caddy
 
 POSTGRES_USER    := devuser
 POSTGRES_PASSWORD := devpass
@@ -18,6 +18,15 @@ server:
 	DATABASE_URL="postgresql+asyncpg://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@127.0.0.1:5432/$(POSTGRES_DB)" \
 	uvicorn tigerfans.server:app --reload --workers=1
 
+# 1 worker, postgres
+# needs postgres installed. use psql target below if necesary.
+# redis on Linux via unix socket
+# postgres user is set to `postgres` below to accomodate for psql in docker.
+server-w1:
+       REDIS_URL="unix:///$(CURDIR)/data/redis.sock?db=0" \
+       DATABASE_URL="postgresql+asyncpg://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@127.0.0.1:5432/$(POSTGRES_DB)" \
+       uvicorn tigerfans.server:app --host 0.0.0.0 --port 8000 --workers=1 --no-access-log
+
 # 2 workers, postgres
 # needs postgres installed. use psql target below if necesary.
 # redis on Linux via unix socket
@@ -25,7 +34,7 @@ server:
 server-w2:
 	REDIS_URL="unix:///$(CURDIR)/data/redis.sock?db=0" \
 	DATABASE_URL="postgresql+asyncpg://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@127.0.0.1:5432/$(POSTGRES_DB)" \
-	uvicorn tigerfans.server:app --host 0.0.0.0 --port 8000 --workers=2
+	uvicorn tigerfans.server:app --host 0.0.0.0 --port 8000 --workers=2 --no-access-log
 
 # 3 workers, postgres, no access log to stdout
 # needs postgres installed.
