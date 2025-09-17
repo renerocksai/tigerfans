@@ -269,6 +269,9 @@ def main():
     print('*' * 64)
     print('\n', flush=True)   # don't forget to flush, for tee
 
+    # default: return code = 1  -->  sth is wrong
+    rc = 1
+
     try:
         for env_file in collect_env_files(args):
             print(f"\n=== ENV FILE {env_file} ===", flush=True)
