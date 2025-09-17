@@ -1,7 +1,9 @@
 import os
-from typing import Optional
+from typing import Optional, Callable, AsyncContextManager
 from sqlalchemy.ext.asyncio import AsyncConnection
 import redis.asyncio as redis
+
+Gated = Callable[[], AsyncContextManager[None]]
 
 BACKEND = os.getenv("PAYSESSION_BACKEND", "redis").lower()  # 'redis' | 'pg'
 
@@ -14,13 +16,19 @@ else:
 # Factory keeps server.py simple and constructor-agnostic:
 def new_store(*, db: Optional[AsyncConnection] = None,
               r: Optional[redis.Redis] = None,
-              ttl_seconds: int = 300):
+              ttl_seconds: int = 300,
+              gated: Gated = None):
     if BACKEND == "pg":
         if db is None:
             raise RuntimeError(
                 "PaymentSessionStore(pg) requires db=AsyncConnection"
             )
-        return _PaymentSessionStore(db=db, ttl_seconds=ttl_seconds)
+        if gated is None:
+            raise RuntimeError(
+                "PaymentSessionStore(pg) requires gated=Gated"
+            )
+        return _PaymentSessionStore(db=db, ttl_seconds=ttl_seconds,
+                                    gated=gated)
     else:
         if r is None:
             raise RuntimeError(

@@ -17,6 +17,7 @@ from .model.order import Base, Order
 from .model import accounting
 from .model.accounting import TicketAmount_first_n, BACKEND as ACCT_BACKEND
 from .model.accounting import create_accounts, initial_transfers
+from .model.accounting._postgres import GatedAsyncSession
 from .model.paymentsession import (
         PaymentSessionStore, new_store, BACKEND as PAYSESSION_BACKEND
 )
@@ -64,7 +65,7 @@ ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "supasecret")
 
 
-engine, SessionAsync = make_async_engine(DATABASE_URL)
+engine, SessionAsync, _, gated = make_async_engine(DATABASE_URL)
 
 
 async def get_db() -> AsyncSession:
@@ -94,7 +95,7 @@ async def paymentsessions() -> PaymentSessionStore:
     if PAYSESSION_BACKEND == 'pg':
         conn: AsyncConnection
         async with engine.connect() as conn:
-            yield new_store(db=conn)
+            yield new_store(db=conn, gated=gated)
     else:
         yield new_store(r=app.state.redis)
 
@@ -102,7 +103,7 @@ async def paymentsessions() -> PaymentSessionStore:
 async def accounting_client() -> tb.ClientAsync | AsyncSession:
     if ACCT_BACKEND == 'pg':
         async with SessionAsync() as session:
-            yield session
+            yield GatedAsyncSession(session=session, gated=gated)
     else:
         yield get_tb_client()
 
@@ -306,15 +307,17 @@ async def create_checkout(
 # ----------------------------
 @app.get("/api/orders/{order_id}")
 async def get_order(order_id: str, db: AsyncSession = Depends(get_db)):
-    # raw sql -> sqlalchemy won't start an implicit transaction
-    result = await db.execute(
-        text("""
-            SELECT id, status, cls, qty, amount, currency, paid_at,
-                   ticket_code, got_goodie
-            FROM orders WHERE id = :id
-        """),
-        {"id": order_id},
-    )
+    # DB-GATE!!!
+    async with gated():
+        async with db.begin():
+            result = await db.execute(
+                text("""
+                    SELECT id, status, cls, qty, amount, currency, paid_at,
+                           ticket_code, got_goodie
+                    FROM orders WHERE id = :id
+                """),
+                {"id": order_id},
+            )
     row = result.mappings().first()
     if not row:
         # not created yet (webhook still processing) -> let client keep polling

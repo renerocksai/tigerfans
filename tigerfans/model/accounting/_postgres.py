@@ -12,9 +12,21 @@ the app:
 from __future__ import annotations
 import time
 from typing import Tuple, Dict, Any, Optional
+from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession, AsyncConnection
 from sqlalchemy import text
+
+from typing import Callable, AsyncContextManager
+
+Gated = Callable[[], AsyncContextManager[None]]
+
+
+@dataclass
+class GatedAsyncSession:
+    session: AsyncSession
+    gated: Gated
+
 
 # ------------------------------------------------------------------------------
 # CONFIG: keep in sync with your TB demo numbers if you want apples-to-apples
@@ -111,7 +123,7 @@ async def ensure_schema_and_fixtures(
 # Compatibility helpers (to mirror TB-like API)
 # ------------------------------------------------------------------------------
 
-async def create_accounts(db: AsyncSession) -> bool:
+async def create_accounts(db: AsyncConnection) -> bool:
     """
     For parity with TB: ensures schema + fixtures. Returns True on success.
     """
@@ -121,7 +133,7 @@ async def create_accounts(db: AsyncSession) -> bool:
     return True
 
 
-async def initial_transfers(db: AsyncSession) -> None:
+async def initial_transfers(db: AsyncConnection) -> None:
     """
     TB seeds balances by transfers; here capacity is already seeded in
     resources.
@@ -134,6 +146,7 @@ async def initial_transfers(db: AsyncSession) -> None:
 # Core logic
 # ------------------------------------------------------------------------------
 
+# UN-GATED internal function
 async def _available_units(
     db: AsyncSession, resource: str, now_ts: float
 ) -> Dict[str, int]:
@@ -174,6 +187,7 @@ async def _available_units(
     }
 
 
+# UN-GATED internal function
 async def _insert_hold_if_capacity(
     db: AsyncSession, resource: str, qty: int, timeout_seconds: Optional[int]
 ) -> Optional[int]:
@@ -204,10 +218,10 @@ async def _insert_hold_if_capacity(
 # Public API (parallels TB impl)
 
 async def hold_tickets(
-    db: AsyncSession,
+    db: GatedAsyncSession,
     ticket_class: str,
     qty: int,
-    timeout_seconds: int
+    timeout_seconds: int,
 ) -> Tuple[str, str, bool, bool]:
     """
     Create PENDING holds for (ticket_class) and (goodie: qty=1).
@@ -218,13 +232,14 @@ async def hold_tickets(
 
     res_name = RES_CLASS_A if ticket_class == "A" else RES_CLASS_B
 
-    async with db.begin():
-        ticket_hold_id = await _insert_hold_if_capacity(
-            db, res_name, qty, timeout_seconds
-        )
-        goodie_hold_id = await _insert_hold_if_capacity(
-            db, RES_GOODIE, 1, timeout_seconds
-        )
+    async with db.gated():
+        async with db.session.begin():
+            ticket_hold_id = await _insert_hold_if_capacity(
+                db.session, res_name, qty, timeout_seconds
+            )
+            goodie_hold_id = await _insert_hold_if_capacity(
+                db.session, RES_GOODIE, 1, timeout_seconds
+            )
 
     has_ticket = ticket_hold_id is not None
     has_goodie = goodie_hold_id is not None
@@ -239,9 +254,9 @@ async def hold_tickets(
 
 
 async def book_immediately(
-    db: AsyncSession,
+    db: GatedAsyncSession,
     ticket_class: str,
-    qty: int
+    qty: int,
 ) -> Tuple[str, str, bool, bool]:
     """
     Direct "posted" booking without a pending step (parallels TB fast-path).
@@ -252,32 +267,36 @@ async def book_immediately(
 
     res_name = RES_CLASS_A if ticket_class == "A" else RES_CLASS_B
 
-    async with db.begin():
-        # Try to insert ticket as posted if capacity remains (simulate
-        # "immediate" confirmation).
-        # We'll use the same capacity check function and then insert with
-        # status='posted'
-        now_ts = time.time()
-        avail_ticket = await _available_units(db, res_name, now_ts)
-        ticket_id = None
-        if avail_ticket["available"] >= qty:
-            row = (await db.execute(text("""
-                INSERT INTO holds(resource, qty, status, expires_at, created_at)
-                VALUES(:r, :q, 'posted', NULL, :c)
-                RETURNING id
-            """), {"r": res_name, "q": qty, "c": now_ts})).first()
-            ticket_id = int(row[0])
+    async with db.gated():
+        async with db.session.begin():
+            # Try to insert ticket as posted if capacity remains (simulate
+            # "immediate" confirmation).
+            # We'll use the same capacity check function and then insert with
+            # status='posted'
+            now_ts = time.time()
+            avail_ticket = await _available_units(db.session, res_name, now_ts)
+            ticket_id = None
+            if avail_ticket["available"] >= qty:
+                row = (await db.session.execute(text("""
+                    INSERT INTO holds(
+                        resource, qty, status, expires_at, created_at)
+                    VALUES(:r, :q, 'posted', NULL, :c)
+                    RETURNING id
+                """), {"r": res_name, "q": qty, "c": now_ts})).first()
+                ticket_id = int(row[0])
 
-        # Goodie: qty=1
-        goodie_id = None
-        avail_goodie = await _available_units(db, RES_GOODIE, now_ts)
-        if avail_goodie["available"] >= 1:
-            row = (await db.execute(text("""
-                INSERT INTO holds(resource, qty, status, expires_at, created_at)
-                VALUES(:r, 1, 'posted', NULL, :c)
-                RETURNING id
-            """), {"r": RES_GOODIE, "c": now_ts})).first()
-            goodie_id = int(row[0])
+            # Goodie: qty=1
+            goodie_id = None
+            avail_goodie = await _available_units(db.session, RES_GOODIE,
+                                                  now_ts)
+            if avail_goodie["available"] >= 1:
+                row = (await db.session.execute(text("""
+                    INSERT INTO holds(resource, qty, status, expires_at,
+                        created_at)
+                    VALUES(:r, 1, 'posted', NULL, :c)
+                    RETURNING id
+                """), {"r": RES_GOODIE, "c": now_ts})).first()
+                goodie_id = int(row[0])
 
     return (
         str(ticket_id) if ticket_id is not None else "0",
@@ -288,12 +307,12 @@ async def book_immediately(
 
 
 async def commit_order(
-    db: AsyncSession,
+    db: GatedAsyncSession,
     ticket_hold_id: str | int,
     goodie_hold_id: str | int,
     ticket_class: str,
     qty: int,
-    try_goodie: bool
+    try_goodie: bool,
 ) -> Tuple[bool, bool]:
     """
     POST (commit) pending holds to posted.
@@ -312,39 +331,40 @@ async def commit_order(
     gets_ticket = False
     gets_goodie = False
 
-    async with db.begin():
-        if th is not None:
-            # Only post if still pending and not expired
-            row = (await db.execute(text("""
-                UPDATE holds
-                SET status='posted', expires_at=NULL
-                WHERE id=:id
-                  AND status='pending'
-                  AND (expires_at IS NULL OR expires_at > :now)
-                RETURNING id
-            """), {"id": th, "now": now_ts})).first()
-            gets_ticket = row is not None
+    async with db.gated():
+        async with db.session.begin():
+            if th is not None:
+                # Only post if still pending and not expired
+                row = (await db.session.execute(text("""
+                    UPDATE holds
+                    SET status='posted', expires_at=NULL
+                    WHERE id=:id
+                      AND status='pending'
+                      AND (expires_at IS NULL OR expires_at > :now)
+                    RETURNING id
+                """), {"id": th, "now": now_ts})).first()
+                gets_ticket = row is not None
 
-        if gh is not None:
-            row = (await db.execute(text("""
-                UPDATE holds
-                SET status='posted', expires_at=NULL
-                WHERE id=:id
-                  AND status='pending'
-                  AND (expires_at IS NULL OR expires_at > :now)
-                RETURNING id
-            """), {"id": gh, "now": now_ts})).first()
-            gets_goodie = row is not None
+            if gh is not None:
+                row = (await db.session.execute(text("""
+                    UPDATE holds
+                    SET status='posted', expires_at=NULL
+                    WHERE id=:id
+                      AND status='pending'
+                      AND (expires_at IS NULL OR expires_at > :now)
+                    RETURNING id
+                """), {"id": gh, "now": now_ts})).first()
+                gets_goodie = row is not None
 
     return gets_ticket, gets_goodie
 
 
 async def cancel_order(
-    db: AsyncSession,
+    db: GatedAsyncSession,
     ticket_hold_id: str | int,
     goodie_hold_id: str | int,
     ticket_class: str,
-    qty: int
+    qty: int,
 ) -> None:
     """
     VOID pending holds (best-effort). If already posted/voided/expired, no
@@ -360,21 +380,22 @@ async def cancel_order(
     if not ids:
         return
 
-    async with db.begin():
-        await db.execute(text("""
-            UPDATE holds
-            SET status='voided'
-            WHERE id = ANY(:ids)
-              AND status='pending'
-              AND (expires_at IS NULL OR expires_at > :now)
-        """), {"ids": ids, "now": now_ts})
+    async with db.gated():
+        async with db.session.begin():
+            await db.session.execute(text("""
+                UPDATE holds
+                SET status='voided'
+                WHERE id = ANY(:ids)
+                  AND status='pending'
+                  AND (expires_at IS NULL OR expires_at > :now)
+            """), {"ids": ids, "now": now_ts})
 
 
 # ------------------------------------------------------------------------------
 # Read APIs
 # ------------------------------------------------------------------------------
 
-async def compute_inventory(db: AsyncSession) -> Dict[str, Any]:
+async def compute_inventory(db: GatedAsyncSession) -> Dict[str, Any]:
     """
     Returns:
       {
@@ -386,30 +407,36 @@ async def compute_inventory(db: AsyncSession) -> Dict[str, Any]:
     now_ts = time.time()
     out: Dict[str, Any] = {}
 
-    for label, res_name, cap in (
-        ("A", RES_CLASS_A, TicketAmount_Class_A),
-        ("B", RES_CLASS_B, TicketAmount_Class_B),
-    ):
-        stats = await _available_units(db, res_name, now_ts)
-        out[label] = {
-            "capacity": cap,
-            "sold": stats["sold"],
-            "active_holds": stats["held"],
-            "available": stats["available"],
-            "sold_out": stats["available"] <= 0,
-            "timestamp": _to_iso(now_ts),
-        }
+    async with db.gated():
+        # make explicit transaction for the 2 lookups
+        async with db.session.begin():
+            for label, res_name, cap in (
+                ("A", RES_CLASS_A, TicketAmount_Class_A),
+                ("B", RES_CLASS_B, TicketAmount_Class_B),
+            ):
+                stats = await _available_units(db.session, res_name, now_ts)
+                out[label] = {
+                    "capacity": cap,
+                    "sold": stats["sold"],
+                    "active_holds": stats["held"],
+                    "available": stats["available"],
+                    "sold_out": stats["available"] <= 0,
+                    "timestamp": _to_iso(now_ts),
+                }
     return out
 
 
-async def count_goodies(db: AsyncSession) -> int:
+async def count_goodies(db: GatedAsyncSession) -> int:
     """
     Number of goodies posted so far.
     """
-    posted = (await db.execute(text("""
-        SELECT COALESCE(SUM(qty),0) FROM holds
-        WHERE resource=:r AND status='posted'
-    """), {"r": RES_GOODIE})).scalar_one()
+    async with db.gated():
+        # make explicit transaction
+        async with db.session.begin():
+            posted = (await db.session.execute(text("""
+                SELECT COALESCE(SUM(qty),0) FROM holds
+                WHERE resource=:r AND status='posted'
+            """), {"r": RES_GOODIE})).scalar_one()
     return int(posted)
 
 

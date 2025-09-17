@@ -1,8 +1,10 @@
 import os
+import asyncio
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import (
     create_async_engine, async_sessionmaker, AsyncSession
 )
+from contextlib import asynccontextmanager
 
 
 def _normalize_async_url(url: str) -> str:
@@ -15,13 +17,25 @@ def _normalize_async_url(url: str) -> str:
     return url
 
 
+# DB-GATE!!!!!!!!!!!
+@asynccontextmanager
+async def _gated(sem: asyncio.Semaphore):
+    await sem.acquire()
+    try:
+        yield
+    finally:
+        sem.release()
+
+
 def make_async_engine(database_url: str):
     db_url = _normalize_async_url(database_url)
     kw = dict(future=True, pool_pre_ping=True)
 
+    pool_size = None
     if db_url.startswith("postgresql+asyncpg://"):
+        pool_size = int(os.getenv("DB_POOL_SIZE", "10"))
         kw.update(
-            pool_size=int(os.getenv("DB_POOL_SIZE", "10")),
+            pool_size=pool_size,
             max_overflow=int(os.getenv("DB_MAX_OVERFLOW", "10")),
             pool_timeout=int(os.getenv("DB_POOL_TIMEOUT", "30")),
         )
@@ -43,4 +57,23 @@ def make_async_engine(database_url: str):
         expire_on_commit=False,
         autoflush=False,
     )
-    return engine, SessionAsync
+
+    # DB-GATE!!!!!!!!!!!
+    # Create a per-engine gate. Default to pool_size
+    if pool_size is None:
+        # sqlite
+        gate_limit = int(os.getenv("DB_GATE_LIMIT", "10"))
+    else:
+        # postgres
+        gate_limit = int(
+            os.getenv("DB_GATE_LIMIT", pool_size)
+        )
+
+    db_gate = asyncio.Semaphore(max(1, gate_limit))
+
+    # expose a tiny helper for `async with gated(db_gate): ...`
+    def gated():
+        return _gated(db_gate)
+
+    # return the gate too so callers can pass it to stores
+    return engine, SessionAsync, db_gate, gated
