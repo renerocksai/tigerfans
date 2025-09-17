@@ -419,23 +419,25 @@ async def payments_webhook(
         status = "PAID" if gets_ticket else "PAID_UNFULFILLED"
 
         try:
-            async with db.begin():
-                db.add(Order(
-                    id=order_id,
-                    tb_transfer_id=str(tb_transfer_id),
-                    goodie_tb_transfer_id=str(goodie_tb_transfer_id),
-                    try_goodie=try_goodie,
-                    cls=cls,
-                    qty=qty,
-                    amount=amount,
-                    currency=currency,
-                    customer_email=email,
-                    created_at=now_ts(),       # or carry from ps["created_at"]
-                    status=status,
-                    paid_at=now_ts(),
-                    ticket_code=ticket_code,
-                    got_goodie=bool(gets_goodie),
-                ))
+            # DB GATE
+            async with gated():
+                async with db.begin():
+                    db.add(Order(
+                        id=order_id,
+                        tb_transfer_id=str(tb_transfer_id),
+                        goodie_tb_transfer_id=str(goodie_tb_transfer_id),
+                        try_goodie=try_goodie,
+                        cls=cls,
+                        qty=qty,
+                        amount=amount,
+                        currency=currency,
+                        customer_email=email,
+                        created_at=now_ts(),   # or carry from ps["created_at"]
+                        status=status,
+                        paid_at=now_ts(),
+                        ticket_code=ticket_code,
+                        got_goodie=bool(gets_goodie),
+                    ))
         except IntegrityError:
             # If we see this, it’s an idempotent replay racing the first write.
             await db.rollback()
@@ -551,18 +553,14 @@ async def mockpay_emit(
     if not ps:
         raise HTTPException(404, "payment session not found")
 
-    session = await rs.get_payment_session(psid)
-    if not session:
-        raise HTTPException(404, detail="payment session not found")
-
     # Build event from Redis hash (strings -> ints as needed)
     order_id = ps['order_id']
     event = {
         "type": f"payment.{kind}",
         "payment_session_id": psid,
         "order_id": order_id,
-        "amount": int(session["amount"]),
-        "currency": session["currency"],
+        "amount": int(ps["amount"]),
+        "currency": ps["currency"],
         "created_at": int(time.time()),
         "idempotency_key": f"evt_{uuid.uuid4().hex}",
     }

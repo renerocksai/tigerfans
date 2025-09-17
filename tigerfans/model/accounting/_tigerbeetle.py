@@ -114,7 +114,7 @@ async def initial_transfers(client: tb.ClientAsync):
 
 async def hold_tickets(
         client: tb.ClientAsync, ticket_class: str, qty: int,
-        timeout_seconds=int
+        timeout_seconds: int
 ) -> Tuple[str, str, bool, bool]:
     # we issue 2 transfers: one for the actual tickets and one for the goodie
     # counter
@@ -364,7 +364,7 @@ async def compute_inventory(client: tb.ClientAsync) -> dict:
             budget = TicketAmount_Class_B
         available = budget - sold - held
         out[ticket_class] = {
-            "capacity": TicketAmount_Class_A,
+            "capacity": budget,
             "sold": sold,
             "active_holds": held,
             "available": available,
