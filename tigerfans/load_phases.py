@@ -69,7 +69,7 @@ def write_csv(
             )
         if checkout_summary:
             f.write(
-                f'{tag},{timestamp},checkout,{accounting_backend},'
+                f'{timestamp},{tag},checkout,{accounting_backend},'
                 f'{paymentsessions_backend},{concurrency},'
                 f'{db_pool_size},{redis_max_conn},'
                 f'{webhook_mode},'
@@ -80,7 +80,7 @@ def write_csv(
             )
         if webhook_summary:
             f.write(
-                f'{tag},{timestamp},webhook,{accounting_backend},'
+                f'{timestamp},{tag},webhook,{accounting_backend},'
                 f'{paymentsessions_backend},{concurrency},'
                 f'{db_pool_size},{redis_max_conn},'
                 f'{webhook_mode},'
