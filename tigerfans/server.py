@@ -94,8 +94,8 @@ def get_tb_client() -> tb.ClientAsync:
 async def paymentsessions() -> PaymentSessionStore:
     if PAYSESSION_BACKEND == 'pg':
         conn: AsyncConnection
-        async with engine.connect() as conn:
-            yield new_store(db=conn, gated=gated)
+        async with SessionAsync() as session:
+            yield new_store(db=session, gated=gated)
     else:
         yield new_store(r=app.state.redis)
 
