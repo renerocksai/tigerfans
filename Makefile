@@ -7,8 +7,7 @@ POSTGRES_DB      := tigerfans
 # default load_test config
 LT_ENV_DIR   ?= ./load_tests
 LT_ENV_GLOB  ?= *.env
-LT_CSV       ?= load_tests.csv
-LT_LOG       ?= load_tests.log
+LT_OUTPUT    ?= load_test
 LT_SERVER_CMD?= make server-w1
 LT_REPEAT    ?= 3
 
@@ -89,20 +88,20 @@ caddy:
 # we don't use tee as it would die first and cause broken stdout/sterr pipes
 # on ctrl+c
 load-tests:
-	@echo "==> Running load tests, output is being logged to $(LT_LOG)"
+	@echo "==> Running load tests, output is being logged to $(LT_OUTPUT).log"
 	@echo "==> Use: tail -f $(LT_LOG)"
 	@find $(LT_ENV_DIR) -name '$(LT_ENV_GLOB)' | \
-	python benchctl.py --env-file=- --csv-file=$(LT_CSV) \
+	python benchctl.py --env-file=- --csv-file=$(LT_OUTPUT).csv \
 	  --server-cmd='$(LT_SERVER_CMD)' --repeat=$(LT_REPEAT) \
-	>> $(LT_LOG) 2>&1
+	>> $(LT_OUTPUT).log 2>&1
 
 load-tests-print:
 	@find $(LT_ENV_DIR) -name '*.env' -print | sort
 
 load-tests-mock:
-	@echo "==> Running mock load tests, output is being logged to $(LT_LOG)"
+	@echo "==> Running mock load tests, output is being logged to $(LT_OUTPUT).log"
 	@echo "==> Use: tail -f $(LT_LOG)"
 	@find $(LT_ENV_DIR) -name '$(LT_ENV_GLOB)' | \
-	python benchctl.py --env-file=- --csv-file=$(LT_CSV) \
+	python benchctl.py --env-file=- --csv-file=$(LT_OUTPUT).csv \
 	  --server-cmd='sleep 60' --repeat=$(LT_REPEAT) \
-	>> $(LT_LOG) 2>&1
+	>> $(LT_OUTPUT).log 2>&1
