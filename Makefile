@@ -89,7 +89,7 @@ caddy:
 # on ctrl+c
 load-tests:
 	@echo "==> Running load tests, output is being logged to $(LT_OUTPUT).log"
-	@echo "==> Use: tail -f $(LT_LOG)"
+	@echo "==> Use: tail -f $(LT_OUTPUT).log"
 	@find $(LT_ENV_DIR) -name '$(LT_ENV_GLOB)' | \
 	python benchctl.py --env-file=- --csv-file=$(LT_OUTPUT).csv \
 	  --server-cmd='$(LT_SERVER_CMD)' --repeat=$(LT_REPEAT) \
@@ -100,7 +100,7 @@ load-tests-print:
 
 load-tests-mock:
 	@echo "==> Running mock load tests, output is being logged to $(LT_OUTPUT).log"
-	@echo "==> Use: tail -f $(LT_LOG)"
+	@echo "==> Use: tail -f $(LT_OUTPUT).log"
 	@find $(LT_ENV_DIR) -name '$(LT_ENV_GLOB)' | \
 	python benchctl.py --env-file=- --csv-file=$(LT_OUTPUT).csv \
 	  --server-cmd='sleep 60' --repeat=$(LT_REPEAT) \
