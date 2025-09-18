@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TigerBench — TigerFans</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        brand: { 50:"#ecfeff",100:"#cffafe",200:"#a5f3fc",300:"#67e8f9",400:"#22d3ee",500:"#06b6d4",600:"#0891b2",700:"#0e7490",800:"#155e75",900:"#164e63" },
+                        cyan: {
+                            50: '#ecfeff',
+                            100: '#cffafe',
+                            200: '#a5f3fc',
+                            300: '#86e1f7',
+                            400: '#67e8f9',
+                            500: '#22d3ee',
+                            600: '#06b6d4',
+                            700: '#0891b2',
+                            800: '#0e7490',
+                            900: '#164e63',
+                            950: '#0c3646'
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+    <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+    <style>
+        .glass {
+            background: rgba(255, 255, 255, 0.08);
+            backdrop-filter: blur(8px);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+        }
+        .chart-maximized {
+            position: fixed !important;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            z-index: 40;
+            background: #0f172a;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 1rem;
+        }
+        .chart-maximized > div {
+            width: 100%;
+            height: 100%;
+            max-width: 100%;
+            max-height: 100%;
+        }
+    </style>
+</head>
+<body class="bg-slate-950 text-slate-200 min-h-screen p-4">
+    <header class="sticky top-0 z-30 bg-slate-950/70 backdrop-blur border-b border-white/10">
+        <div class="mx-auto max-w-6xl px-4 py-3 flex items-center gap-4">
+            <div class="inline-flex items-center gap-2 font-semibold text-white">
+                <svg class="h-6 w-6" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                    <path d="M4 17c5-2 11-2 16 0M4 12c5-2 11-2 16 0M4 7c5-2 11-2 16 0"
+                          stroke="#06b6d4" stroke-width="2" stroke-linecap="round"/>
+                </svg>
+                <span class="text-xl">TigerBench</span>
+            </div>
+            <nav class="ml-auto flex items-center gap-4 text-slate-300">
+                <span class="text-brand-400">Built for the love of the users by</span>
+                <a href="/" class="inline-flex items-center gap-2 font-semibold text-white">
+                    <img src="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTYwIiBoZWlnaHQ9IjI4IiB2aWV3Qm94PSIwIDAgMTYwIDI4IiBmaWxsPSJub25lIiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPgogIDxkZWZzPgogICAgPGxpbmVhckdyYWRpZW50IGlkPSJnIiB4MT0iMCIgeTE9IjAiIHgyPSIxNjAiIHkyPSIyOCIgZ3JhZGllbnRVbml0cz0idXNlclNwYWNlT25Vc2UiPgogICAgICA8c3RvcCBzdG9wLWNvbG9yPSIjMjJkM2VlIi8+CiAgICAgIDxzdG9wIG9mZnNldD0iMSIgc3RvcC1jb2xvcj0iIzA2YjZkNCIvPgogICAgPC9saW5lYXJHcmFkaWVudD4KICA8L2RlZnM+CiAgPCEtLSBzaW1wbGUgdGlnZXIgc3RyaXBlIG1hcmsgLS0+CiAgPGc+CiAgICA8cGF0aCBkPSJNMTQgMiBMMTggMTAgTDI4IDExIEwyMSAxNyBMMjMgMjYgTDE0IDIxIEw1IDI2IEw3IDE3IEwwIDExIEwxMCAxMCBaIiBmaWxsPSJ1cmwoI2cpIi8+CiAgPC9nPgogIDwhLS0gd29yZG1hcmsgLS0+CiAgPHRleHQgeD0iMzgiIHk9IjIwIiBmb250LWZhbWlseT0iSW50ZXIsIHVpLXNhbnMtc2VyaWYsIHN5c3RlbS11aSIgZm9udC13ZWlnaHQ9IjcwMCIgZm9udC1zaXplPSIxOCIgZmlsbD0id2hpdGUiPlRpZ2VyRmFuczwvdGV4dD4KPC9zdmc+" alt="TigerFans Logo" />
+                </a>
+            </nav>
+        </div>
+    </header>
+
+    <main class="max-w-7xl mx-auto mt-4 space-y-6">
+        <div class="glass rounded-xl p-4">
+            <div class="flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between">
+                <button id="uploadBtn" class="bg-cyan-500 hover:bg-cyan-600 text-white px-4 py-2 rounded-lg font-medium transition-colors" aria-label="Choose CSV file">Choose CSV…</button>
+                <input type="file" id="csvInput" accept=".csv" hidden>
+                <div class="flex flex-col sm:flex-row gap-4 items-start sm:items-center flex-1">
+                    <label class="text-sm text-slate-400">Concurrency:</label>
+                    <select id="concSelect" class="bg-slate-800 border border-slate-600 text-slate-200 px-3 py-2 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500" aria-label="Select concurrency">
+                        <option value="ALL">ALL</option>
+                    </select>
+                    <span id="status" class="text-sm text-slate-500">No file loaded.</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div class="glass rounded-xl p-4">
+                <h3 class="text-lg font-semibold mb-4 text-center">Checkout — ops/s</h3>
+                <div id="checkout-bar" class="w-full h-64"></div>
+            </div>
+            <div class="glass rounded-xl p-4">
+                <h3 class="text-lg font-semibold mb-4 text-center">Webhook — ops/s</h3>
+                <div id="webhook-bar" class="w-full h-64"></div>
+            </div>
+            <div class="glass rounded-xl p-4">
+                <h3 class="text-lg font-semibold mb-4 text-center">Checkout — ops/s vs concurrency</h3>
+                <div id="checkout-line" class="w-full h-64"></div>
+            </div>
+            <div class="glass rounded-xl p-4">
+                <h3 class="text-lg font-semibold mb-4 text-center">Webhook — ops/s vs concurrency</h3>
+                <div id="webhook-line" class="w-full h-64"></div>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        let data = null;
+        let maximizedChart = null;
+        const colors = {
+            'PG Only': '#06b6d4',    // Cyan-600 to match Choose CSV button
+            'PG Redis': '#ff2d55',   // Neon red-pink for Redis
+            'TB Redis': '#f0e130'    // Neon yellow for TigerBeetle
+        };
+        const textColors = {
+            'PG Only': '#e2e8f0',    // slate-200 for cyan
+            'PG Redis': '#e2e8f0',   // slate-200 for red-pink
+            'TB Redis': '#1e293b'    // slate-900 for yellow
+        };
+        const categories = ['PG Only', 'PG Redis', 'TB Redis'];
+        const phases = ['checkout', 'webhook'];
+
+        function niceRange(maxVal) {
+            if (maxVal <= 0 || !isFinite(maxVal)) return [0, 10];
+            const roughStep = maxVal / 10;
+            const order = Math.floor(Math.log10(roughStep));
+            const step = Math.pow(10, order);
+            let mult = roughStep / step;
+            if (mult <= 1.5) mult = 1;
+            else if (mult <= 3) mult = 2;
+            else if (mult <= 7) mult = 5;
+            else mult = 10;
+            const niceStep = step * mult;
+            const niceMax = Math.ceil(maxVal / niceStep) * niceStep;
+            return [0, niceMax];
+        }
+
+        function computeBarStats(phase, selectedConc) {
+            const barMeans = {};
+            const barStds = {};
+            const validCategories = [];
+
+            categories.forEach(cat => {
+                let values = [];
+                if (selectedConc === 'ALL') {
+                    const concMeans = data[phase]?.concs?.map(conc => data[phase].means[conc][cat]).filter(m => m > 0 && isFinite(m)) || [];
+                    if (concMeans.length > 0) {
+                        const meanOfMeans = concMeans.reduce((a, b) => a + b, 0) / concMeans.length;
+                        const variance = concMeans.reduce((a, b) => a + Math.pow(b - meanOfMeans, 2), 0) / concMeans.length;
+                        const std = Math.sqrt(variance);
+                        values = [meanOfMeans];
+                        barMeans[cat] = meanOfMeans;
+                        barStds[cat] = std;
+                        validCategories.push(cat);
+                    }
+                } else {
+                    const conc = parseInt(selectedConc);
+                    const arr = data[phase]?.[conc]?.[cat] || [];
+                    if (arr.length > 0) {
+                        const mean = arr.reduce((a, b) => a + b, 0) / arr.length;
+                        const variance = arr.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / arr.length;
+                        const std = Math.sqrt(variance);
+                        values = [mean];
+                        barMeans[cat] = mean;
+                        barStds[cat] = std;
+                        validCategories.push(cat);
+                    }
+                }
+                if (values.length === 0) {
+                    barMeans[cat] = 0;
+                    barStds[cat] = 0;
+                }
+            });
+
+            const barY = validCategories.map(cat => isFinite(barMeans[cat]) ? barMeans[cat] : 0);
+            const barError = validCategories.map(cat => isFinite(barStds[cat]) ? barStds[cat] : 0);
+            const maxY = barY.length > 0 ? Math.max(...barY.map((y, i) => y + barError[i])) : 10;
+            const range = niceRange(maxY);
+            return { barY, barError, range, validCategories: validCategories.filter(cat => typeof cat === 'string') };
+        }
+
+        function toggleMaximize(divId, gd) {
+            const chartDiv = document.getElementById(divId).parentElement;
+            if (maximizedChart === divId) {
+                // Restore
+                chartDiv.classList.remove('chart-maximized');
+                maximizedChart = null;
+                Plotly.Plots.resize(gd);
+            } else {
+                // Maximize
+                if (maximizedChart) {
+                    const prevChartDiv = document.getElementById(maximizedChart).parentElement;
+                    prevChartDiv.classList.remove('chart-maximized');
+                    Plotly.Plots.resize(document.getElementById(maximizedChart));
+                }
+                chartDiv.classList.add('chart-maximized');
+                maximizedChart = divId;
+                Plotly.Plots.resize(gd);
+            }
+        }
+
+        function renderBarChart(divId, phase, selectedConc) {
+            const { barY, barError, range, validCategories } = computeBarStats(phase, selectedConc);
+            if (validCategories.length === 0) {
+                const trace = {
+                    type: 'bar',
+                    x: categories,
+                    y: [0, 0, 0],
+                    text: ['0.0', '0.0', '0.0'],
+                    textposition: 'auto',
+                    textfont: { color: categories.map(cat => textColors[cat]) },
+                    marker: {
+                        color: categories.map(cat => colors[cat]),
+                        cornerradius: 5
+                    }
+                };
+                const layout = {
+                    template: 'plotly_dark',
+                    xaxis: {
+                        title: { text: 'Category', font: { color: '#e2e8f0' } },
+                        tickfont: { color: '#e2e8f0' },
+                        categoryorder: 'array',
+                        categoryarray: categories
+                    },
+                    yaxis: {
+                        title: { text: 'ops/s', font: { color: '#e2e8f0' } },
+                        tickfont: { color: '#e2e8f0' },
+                        range: [0, 10],
+                        gridcolor: 'rgba(255,255,255,0.1)'
+                    },
+                    bargap: 0.3,
+                    margin: { t: 20, b: 50, l: 50, r: 20 },
+                    showlegend: false,
+                    plot_bgcolor: 'rgba(0,0,0,0)',
+                    paper_bgcolor: '#0f172a' // Match Tailwind bg-slate-950
+                };
+                Plotly.newPlot(divId, [trace], layout, {
+                    responsive: true,
+                    modeBarButtonsToRemove: ['select2d', 'lasso2d'],
+                    modeBarButtonsToAdd: [{
+                        name: 'maximize',
+                        icon: {
+                            width: 24,
+                            height: 24,
+                            path: 'M3 3h6v2H5v4H3V3zm12 0h6v6h-2V5h-4V3zm6 12h-6v2h4v4h2v-6zm-18 2h6v6H3v-4h2v-2z'
+                        },
+                        click: function(gd) { toggleMaximize(divId, gd); },
+                        title: 'Maximize Chart'
+                    }, {
+                        name: 'restore',
+                        icon: {
+                            width: 24,
+                            height: 24,
+                            path: 'M5 5h14v14H5V5zm2 2v10h10V7H7z'
+                        },
+                        click: function(gd) { toggleMaximize(divId, gd); },
+                        title: 'Restore Chart'
+                    }],
+                    toImageButtonOptions: {
+                        format: 'png',
+                        filename: `${phase}_bar`,
+                        scale: 1,
+                        width: 800,
+                        height: 600,
+                        backgroundColor: '#0f172a'
+                    }
+                }).then(gd => {
+                    gd.on('plotly_relayout', () => {
+                        try {
+                            console.log(`Relayout event on ${divId}`);
+                        } catch (e) {
+                            // Silently catch errors
+                        }
+                    });
+                });
+                return;
+            }
+
+            const trace = {
+                type: 'bar',
+                x: validCategories,
+                y: barY,
+                text: barY.map(y => isFinite(y) ? y.toFixed(1) : '0.0'),
+                textposition: 'auto',
+                textfont: { color: validCategories.map(cat => textColors[cat]) },
+                marker: {
+                    color: validCategories.map(cat => colors[cat]),
+                    cornerradius: 5
+                },
+                error_y: {
+                    visible: true,
+                    type: 'data',
+                    array: barError,
+                    symmetric: false,
+                    arrayminus: barError.map(() => 0),
+                    color: validCategories.map(cat => colors[cat]),
+                    thickness: 1.5,
+                    width: 8
+                }
+            };
+            const layout = {
+                template: 'plotly_dark',
+                xaxis: {
+                    title: { text: 'Category', font: { color: '#e2e8f0' } },
+                    tickfont: { color: '#e2e8f0' },
+                    categoryorder: 'array',
+                    categoryarray: validCategories
+                },
+                yaxis: {
+                    title: { text: 'ops/s', font: { color: '#e2e8f0' } },
+                    tickfont: { color: '#e2e8f0' },
+                    range: range,
+                    gridcolor: 'rgba(255,255,255,0.1)'
+                },
+                bargap: 0.3,
+                margin: { t: 20, b: 50, l: 50, r: 20 },
+                showlegend: false,
+                plot_bgcolor: 'rgba(0,0,0,0)',
+                paper_bgcolor: '#0f172a' // Match Tailwind bg-slate-950
+            };
+            Plotly.newPlot(divId, [trace], layout, {
+                responsive: true,
+                modeBarButtonsToRemove: ['select2d', 'lasso2d'],
+                modeBarButtonsToAdd: [{
+                    name: 'maximize',
+                    icon: {
+                        width: 24,
+                        height: 24,
+                        path: 'M3 3h6v2H5v4H3V3zm12 0h6v6h-2V5h-4V3zm6 12h-6v2h4v4h2v-6zm-18 2h6v6H3v-4h2v-2z'
+                    },
+                    click: function(gd) { toggleMaximize(divId, gd); },
+                    title: 'Maximize Chart'
+                }, {
+                    name: 'restore',
+                    icon: {
+                        width: 24,
+                        height: 24,
+                        path: 'M5 5h14v14H5V5zm2 2v10h10V7H7z'
+                    },
+                    click: function(gd) { toggleMaximize(divId, gd); },
+                    title: 'Restore Chart'
+                }],
+                toImageButtonOptions: {
+                    format: 'png',
+                    filename: `${phase}_bar`,
+                    scale: 1,
+                    width: 800,
+                    height: 600,
+                    backgroundColor: '#0f172a'
+                }
+            }).then(gd => {
+                gd.on('plotly_relayout', () => {
+                    try {
+                        console.log(`Relayout event on ${divId}`);
+                    } catch (e) {
+                        // Silently catch errors
+                    }
+                });
+            });
+        }
+
+        function renderLineChart(divId, phase) {
+            const x = data[phase]?.concs || [];
+            const traces = categories.map(cat => ({
+                type: 'scatter',
+                mode: 'lines+markers',
+                name: cat,
+                x: x,
+                y: x.map(conc => data[phase]?.means[conc]?.[cat] || 0),
+                line: { color: colors[cat] },
+                marker: { color: colors[cat], size: 6 }
+            }));
+            const maxY = traces.some(t => t.y.length > 0) ? Math.max(...traces.map(t => Math.max(...t.y))) : 10;
+            const range = niceRange(maxY);
+            const layout = {
+                template: 'plotly_dark',
+                xaxis: {
+                    title: { text: 'Concurrency', font: { color: '#e2e8f0' } },
+                    tickfont: { color: '#e2e8f0' }
+                },
+                yaxis: {
+                    title: { text: 'ops/s', font: { color: '#e2e8f0' } },
+                    tickfont: { color: '#e2e8f0' },
+                    range: range,
+                    gridcolor: 'rgba(255,255,255,0.1)'
+                },
+                margin: { t: 20, b: 50, l: 50, r: 20 },
+                plot_bgcolor: 'rgba(0,0,0,0)',
+                paper_bgcolor: '#0f172a',
+                hovermode: 'x unified',
+                hoverlabel: {
+                    bgcolor: 'rgba(15, 23, 42, 0.9)',
+                    font: { color: '#e2e8f0' },
+                    bordercolor: 'rgba(255, 255, 255, 0.2)'
+                },
+                legend: {
+                    orientation: 'h',
+                    yanchor: 'bottom',
+                    y: 1.02,
+                    xanchor: 'right',
+                    x: 1,
+                    font: { color: '#e2e8f0' },
+                    bgcolor: 'rgba(0,0,0,0)'
+                }
+            };
+            Plotly.newPlot(divId, traces, layout, {
+                responsive: true,
+                modeBarButtonsToRemove: ['select2d', 'lasso2d'],
+                modeBarButtonsToAdd: [{
+                    name: 'maximize',
+                    icon: {
+                        width: 24,
+                        height: 24,
+                        path: 'M3 3h6v2H5v4H3V3zm12 0h6v6h-2V5h-4V3zm6 12h-6v2h4v4h2v-6zm-18 2h6v6H3v-4h2v-2z'
+                    },
+                    click: function(gd) { toggleMaximize(divId, gd); },
+                    title: 'Maximize Chart'
+                }, {
+                    name: 'restore',
+                    icon: {
+                        width: 24,
+                        height: 24,
+                        path: 'M5 5h14v14H5V5zm2 2v10h10V7H7z'
+                    },
+                    click: function(gd) { toggleMaximize(divId, gd); },
+                    title: 'Restore Chart'
+                }],
+                toImageButtonOptions: {
+                    format: 'png',
+                    filename: `${phase}_line`,
+                    scale: 1,
+                    width: 800,
+                    height: 600,
+                    backgroundColor: '#0f172a'
+                }
+            }).then(gd => {
+                gd.on('plotly_relayout', () => {
+                    try {
+                        console.log(`Relayout event on ${divId}`);
+                    } catch (e) {
+                        // Silently catch errors
+                    }
+                });
+            });
+        }
+
+        function updateCharts(selectedConc) {
+            phases.forEach(phase => {
+                if (data[phase]) {
+                    renderBarChart(`${phase}-bar`, phase, selectedConc);
+                    renderLineChart(`${phase}-line`, phase);
+                }
+            });
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            const uploadBtn = document.getElementById('uploadBtn');
+            const fileInput = document.getElementById('csvInput');
+            const concSelect = document.getElementById('concSelect');
+
+            uploadBtn.addEventListener('click', () => fileInput.click());
+            concSelect.addEventListener('change', (e) => updateCharts(e.target.value));
+
+            fileInput.addEventListener('change', (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = (ev) => {
+                    const text = ev.target.result;
+                    const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+                    if (lines.length < 2) return;
+                    const headers = lines[0].split(',').map(h => h.trim());
+                    const colIdx = {
+                        phase: headers.indexOf('phase'),
+                        accounting: headers.indexOf('accounting'),
+                        payments: headers.indexOf('payments'),
+                        concurrency: headers.indexOf('concurrency'),
+                        throughput: headers.indexOf('throughput')
+                    };
+                    if (Object.values(colIdx).some(idx => idx === -1)) return;
+
+                    data = { checkout: {}, webhook: {} };
+                    const concSet = new Set();
+                    let rowCount = 0;
+
+                    for (let i = 1; i < lines.length; i++) {
+                        let row;
+                        try {
+                            row = lines[i].split(',').map(r => r.trim());
+                        } catch {
+                            continue;
+                        }
+                        if (row.length <= Math.max(...Object.values(colIdx))) continue;
+
+                        const phase = row[colIdx.phase]?.toLowerCase();
+                        if (!['checkout', 'webhook'].includes(phase)) continue;
+
+                        const acc = row[colIdx.accounting]?.toLowerCase();
+                        const pay = row[colIdx.payments]?.toLowerCase();
+                        let cat;
+                        if (acc === 'pg' && pay === 'pg') cat = 'PG Only';
+                        else if (acc === 'pg' && pay === 'redis') cat = 'PG Redis';
+                        else if (acc === 'tb' && pay === 'redis') cat = 'TB Redis';
+                        else continue;
+
+                        const concStr = row[colIdx.concurrency];
+                        const conc = parseInt(concStr);
+                        if (isNaN(conc)) continue;
+
+                        const thru = parseFloat(row[colIdx.throughput]);
+                        if (isNaN(thru)) continue;
+
+                        if (!data[phase][conc]) data[phase][conc] = { 'PG Only': [], 'PG Redis': [], 'TB Redis': [] };
+                        data[phase][conc][cat].push(thru);
+                        rowCount++;
+                        concSet.add(conc);
+                    }
+
+                    phases.forEach(phase => {
+                        if (!data[phase] || Object.keys(data[phase]).length === 0) return;
+                        data[phase].concs = Object.keys(data[phase]).map(c => parseInt(c)).sort((a, b) => a - b);
+                        data[phase].means = {};
+                        data[phase].concs.forEach(conc => {
+                            data[phase].means[conc] = {};
+                            categories.forEach(cat => {
+                                const arr = data[phase][conc][cat] || [];
+                                data[phase].means[conc][cat] = arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
+                            });
+                        });
+                    });
+
+                    const concs = Array.from(concSet).sort((a, b) => a - b);
+                    concSelect.innerHTML = '<option value="ALL">ALL</option>';
+                    concs.forEach(c => {
+                        const opt = document.createElement('option');
+                        opt.value = c.toString();
+                        opt.textContent = c.toString();
+                        concSelect.appendChild(opt);
+                    });
+
+                    document.getElementById('status').textContent = `Loaded ${rowCount} rows.`;
+                    if (data.checkout || data.webhook) {
+                        updateCharts('ALL');
+                    }
+                };
+                reader.readAsText(file);
+            });
+        });
+    </script>
+</body>
+</html>

@@ -231,6 +231,21 @@ async def landing_page(request: Request):
     )
 
 
+@app.get("/tigerbench", response_class=HTMLResponse)
+async def tigerbench_page(request: Request):
+    return templates.TemplateResponse(
+        "tigerbench.html",
+        {
+            "request": request,
+            "site_name": "TigerFans",
+            "conf_date": "Dec 3–4, 2025",
+            "conf_tagline":
+                "A conference for people who love fast, correct systems.",
+            "PAYSESSION_BACKEND": PAYSESSION_BACKEND,
+            "ACCT_BACKEND": ACCT_BACKEND,
+        },
+    )
+
 # ----------------------------
 # Checkout page (force 1 ticket, require email)
 # ----------------------------
