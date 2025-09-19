@@ -20,7 +20,7 @@ from .model.order import Base, Order
 from .model import accounting
 from .model.accounting import TicketAmount_first_n, BACKEND as ACCT_BACKEND
 from .model.accounting import create_accounts, initial_transfers
-from .model.accounting._tigerbeetle import TransferBatcher, ChainedTransferBatcher
+from .model.accounting._tigerbeetle import ChainedTransferBatcher
 from .model.accounting._postgres import GatedAsyncSession
 from .model.paymentsession import (
         PaymentSessionStore, new_store, BACKEND as PAYSESSION_BACKEND
@@ -191,10 +191,6 @@ async def _accounting_start():
         addr = os.getenv("TB_ADDRESS", "3000")
         cluster_id = int(os.getenv("TB_CLUSTER_ID", "0"))
         client = tb.ClientAsync(cluster_id=cluster_id, replica_addresses=addr)
-        tb_batch_timeout = int(
-            os.getenv("TB_BATCHER_TIMEOUT_MS", "100")
-        ) / 1000
-        batcher = TransferBatcher(client, flush_timeout=tb_batch_timeout)
         batcher = ChainedTransferBatcher(client, max_batch_size=8190)
         app.state.tb_client = client
         app.state.tb_batcher = batcher

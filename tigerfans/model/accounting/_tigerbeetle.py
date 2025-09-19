@@ -5,6 +5,7 @@ from ...helpers import now_ts, to_iso
 import gc
 import asyncio
 
+
 # Config
 TicketAmount_Class_A = 5_000_000
 TicketAmount_Class_B = 5_000_000
@@ -160,164 +161,162 @@ class ChainedTransferBatcher:
         self.client = client
         self.max_batch_size = max_batch_size
         self._lock = asyncio.Lock()
-        # Store parameters, not Transfer objects
-        self._pending_transfer_params: List[dict] = []
-        self._pending_completions: List[Tuple[int, int, asyncio.Future]] = []
-        # The chain: next_batch_task is always running or None
+        # List of submissions:
+        # {
+        #     'original_transfers': List[tb.Transfer],
+        #     'processed': 0,
+        #     'collected_errors': List[tb.CreateTransferResult],
+        #     'fut': asyncio.Future
+        # }
+        self._submissions: List[dict] = []
         self._next_batch_task: asyncio.Task | None = None
 
     async def submit(
         self, transfers: List[tb.Transfer]
     ) -> List[tb.CreateTransferResult]:
-        print(f"submit {len(transfers)} transfers")
+        # print(f"submit {len(transfers)} transfers")
         if not transfers:
             return []
 
-        # Convert to params
-        transfer_params = []
-        for transfer in transfers:
-            params = {
-                'id': transfer.id,
-                'debit_account_id': transfer.debit_account_id,
-                'credit_account_id': transfer.credit_account_id,
-                'amount': transfer.amount,
-                'ledger': transfer.ledger,
-                'code': transfer.code,
-                'flags': transfer.flags,
-                'timeout': getattr(transfer, 'timeout', 0),
-                'pending_id': getattr(transfer, 'pending_id', 0),
-                'user_data_128': getattr(transfer, 'user_data_128', 0),
-                'user_data_64': getattr(transfer, 'user_data_64', 0),
-                'user_data_32': getattr(transfer, 'user_data_32', 0),
-                'timestamp': getattr(transfer, 'timestamp', 0),
-            }
-            transfer_params.append(params)
-
+        fut = asyncio.Future()
         async with self._lock:
-            start_index = len(self._pending_transfer_params)
-            self._pending_transfer_params.extend(transfer_params)
-            fut = asyncio.Future()
-            self._pending_completions.append(
-                (start_index, len(transfers), fut)
-            )
+            self._submissions.append({
+                'original_transfers': transfers[:],  # Copy to keep original
+                'processed': 0,
+                'collected_errors': [],
+                'fut': fut
+            })
 
-            # Always kick off the chain if not running
+            # Kick off the chain if not running
             if self._next_batch_task is None or self._next_batch_task.done():
-                self._next_batch_task = asyncio.create_task(self._process_next_batch())
+                self._next_batch_task = (
+                    asyncio.create_task(self._process_next_batch())
+                )
 
         return await fut
 
     async def _process_next_batch(self) -> None:
-        """Process one batch, then chain to the next if pending transfers exist."""
-        print("🔄 Starting batch processing chain")
+        """Process batches continuously, unifying all pending transfers."""
+        # print("Starting continuous batch processing")
 
         while True:
-            # Extract batch under lock
-            params_batch = None
-            completions = []
+            # Check if done
             async with self._lock:
-                if not self._pending_transfer_params:
-                    print("🔄 No pending transfers - chain complete")
+                if not self._submissions:
+                    # print("No pending submissions - chain complete")
                     self._next_batch_task = None
                     return
 
-                # Take up to max_batch_size
-                batch_size = min(len(self._pending_transfer_params), self.max_batch_size)
-                params_batch = self._pending_transfer_params[:batch_size]
-                self._pending_transfer_params = self._pending_transfer_params[batch_size:]
-
-                # Adjust completions for this batch
-                batch_completions = []
-                for start, num, fut in self._pending_completions[:]:
-                    if start + num <= batch_size:
-                        # This completion is fully in this batch
-                        batch_completions.append((start, num, fut))
-                        self._pending_completions.remove((start, num, fut))
-                    elif start < batch_size:
-                        # This completion spans batches - split it
-                        this_batch_num = batch_size - start
-                        next_batch_start = batch_size
-                        next_batch_num = num - this_batch_num
-
-                        batch_completions.append((start, this_batch_num, fut))
-                        # Replace with the remainder
-                        self._pending_completions.remove((start, num, fut))
-                        self._pending_completions.append((next_batch_start, next_batch_num, fut))
-                        break
-
-                completions = batch_completions
-
-            print(f"🔄 Processing batch of {len(params_batch)} transfers")
-
-            # Reconstruct transfers
+            # Build the next batch by packing as many as possible
             batch = []
-            for params in params_batch:
-                transfer = tb.Transfer(
-                    id=params['id'],
-                    debit_account_id=params['debit_account_id'],
-                    credit_account_id=params['credit_account_id'],
-                    amount=params['amount'],
-                    ledger=params['ledger'],
-                    code=params['code'],
-                    flags=params['flags'],
-                    timeout=params['timeout'] if params['timeout'] else 0,
-                    pending_id=params['pending_id'],
-                    user_data_128=params['user_data_128'],
-                    user_data_64=params['user_data_64'],
-                    user_data_32=params['user_data_32'],
-                    timestamp=params['timestamp'],
-                )
-                batch.append(transfer)
+            # List of
+            # (submission_index, submission_local_start, batch_start, num)
+            batch_mappings = []
+            current_size = 0
+
+            async with self._lock:
+                i = 0
+                while (i < len(self._submissions)
+                       and current_size < self.max_batch_size):
+                    submission = self._submissions[i]
+                    remaining = (
+                            len(submission['original_transfers']) -
+                            submission['processed']
+                    )
+                    if remaining == 0:
+                        i += 1
+                        continue
+
+                    take = min(remaining, self.max_batch_size - current_size)
+
+                    # Add to batch
+                    submission_start = submission['processed']
+                    batch_start = current_size
+                    batch.extend(
+                        submission['original_transfers']
+                        [submission_start:submission_start + take]
+                    )
+
+                    batch_mappings.append(
+                        (i, submission_start, batch_start, take)
+                    )
+
+                    submission['processed'] += take
+
+                    i += 1
+
+            if not batch:
+                # print("No transfers to process - exiting chain")
+                return
+
+            # print(f"Processing unified batch of {len(batch)} transfers")
 
             # Network call
-            try:
-                error_results = await self.client.create_transfers(batch)
-                print(f"✅ Batch complete: {len(error_results)} errors")
+            error_results = await self.client.create_transfers(batch)
+            # print(f"Batch complete: {len(error_results)} errors")
 
-                # Reconstruct full results
-                full_results = [None] * len(batch)
-                for error_result in error_results:
-                    full_results[error_result.index] = error_result
+            # Reconstruct full results: None for success, error for failures
+            full_results = [None] * len(batch)
+            for error_result in error_results:
+                full_results[error_result.index] = error_result
 
-                # Resolve futures for this batch
-                for start, num, fut in completions:
-                    if not fut.done():
-                        sub_slice = full_results[start:start + num]
-                        sub_results = [r for r in sub_slice if r is not None]
-                        fut.set_result(sub_results)
-                        print(f"🔓 Resolved {num} transfers: {len(sub_results)} errors")
-
-            except Exception as e:
-                print(f"❌ Batch error: {e}")
-                # Resolve with errors
-                for start, num, fut in completions:
-                    if not fut.done():
-                        error_result = tb.CreateTransferResult(
-                            index=start,
-                            success=False,
-                            error_code=1,
-                            error_message=str(e),
+            # Map errors back to submissions
+            for (
+                submission_index,
+                submission_start,
+                batch_start,
+                num
+            ) in batch_mappings:
+                submission = self._submissions[submission_index]
+                for j in range(num):
+                    batch_index = batch_start + j
+                    r = full_results[batch_index]
+                    if r is not None:
+                        # Adjust index to local submission index
+                        local_index = submission_start + j
+                        # we cannot create them, so we mock them
+                        adjusted_r = tb.CreateTransfersResult(
+                            index=local_index, result=r.result
                         )
-                        fut.set_result([error_result] * num)
+                        submission['collected_errors'].append(adjusted_r)
 
-            # CHAIN TO NEXT BATCH if there are still pending transfers
+            # Resolve any completed submissions
             async with self._lock:
-                if not self._pending_transfer_params:
-                    print("🔄 No more pending - chain complete")
-                    self._next_batch_task = None
-                    return
-                else:
-                    print(f"🔄 {len(self._pending_transfer_params)} still pending - chaining...")
-                    # Continue the loop - no need to create new task
+                i = 0
+                while i < len(self._submissions):
+                    submission = self._submissions[i]
+                    if (
+                        submission['processed'] ==
+                        len(submission['original_transfers'])
+                    ):
+                        if not submission['fut'].done():
+                            submission['fut'].set_result(
+                                submission['collected_errors']
+                            )
+                            # print(
+                            #     "Resolved submission with "
+                            #     f"{len(submission['collected_errors'])} errors"
+                            # )
+                        del self._submissions[i]
+                    else:
+                        i += 1
+
+            # Continue if still pending
+            # print(
+            #     f"🔄 {len(self._submissions)} submissions still pending "
+            #     "- chaining..."
+            # )
 
     async def flush_now(self) -> None:
         """Force process all pending transfers immediately."""
-        print("🔥 Forcing flush of all pending")
+        # print("Forcing flush of all pending")
         async with self._lock:
             if self._next_batch_task and not self._next_batch_task.done():
                 self._next_batch_task.cancel()
-            self._next_batch_task = asyncio.create_task(self._process_next_batch())
-            await self._next_batch_task
+            self._next_batch_task = asyncio.create_task(
+                self._process_next_batch()
+            )
+        await self._next_batch_task
 
 
 async def create_accounts(client: tb.ClientAsync):
