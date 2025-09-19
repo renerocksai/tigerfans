@@ -391,6 +391,34 @@ async def cancel_order(
             """), {"ids": ids, "now": now_ts})
 
 
+async def cancel_only_goodie(
+    db: GatedAsyncSession,
+    goodie_hold_id: str | int,
+    ticket_class: str,
+) -> None:
+    """
+    VOID pending holds (best-effort). If already posted/voided/expired, no
+    change.
+    """
+    def _as_int(x): return int(x) if isinstance(x, (str, bytes)) else int(x)
+    now_ts = time.time()
+    ids = []
+    if goodie_hold_id not in (None, "0"):
+        ids.append(_as_int(goodie_hold_id))
+    if not ids:
+        return
+
+    async with db.gated():
+        async with db.session.begin():
+            await db.session.execute(text("""
+                UPDATE holds
+                SET status='voided'
+                WHERE id = ANY(:ids)
+                  AND status='pending'
+                  AND (expires_at IS NULL OR expires_at > :now)
+            """), {"ids": ids, "now": now_ts})
+
+
 # ------------------------------------------------------------------------------
 # Read APIs
 # ------------------------------------------------------------------------------
