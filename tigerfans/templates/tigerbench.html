@@ -56,6 +56,25 @@
             max-width: 100%;
             max-height: 100%;
         }
+        .transaction-metric {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1rem;
+        }
+        @media (max-width: 1024px) {
+            .transaction-metric {
+                grid-template-columns: 1fr;
+            }
+        }
+        .metric-label {
+            @apply absolute top-0 left-1/2 transform -translate-x-1/2 text-sm font-medium px-2 py-1 rounded bg-slate-800/80 border border-slate-700 text-white whitespace-nowrap z-10;
+        }
+        .metric-label.operations {
+            @apply text-green-400 border-green-600/50;
+        }
+        .metric-label.transactions {
+            @apply text-red-400 border-red-600/50;
+        }
     </style>
 </head>
 <body class="bg-slate-950 text-slate-200 min-h-screen p-4">
@@ -78,8 +97,16 @@
     </header>
 
     <main class="max-w-7xl mx-auto mt-4 space-y-6">
+        <!-- Tab Navigation -->
         <div class="glass rounded-xl p-4">
-            <div class="flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between">
+            <div class="flex justify-center">
+                <nav class="flex space-x-1 bg-slate-800/50 rounded-lg p-1">
+                    <button id="operations-tab" class="flex-1 py-2 px-3 text-sm font-medium text-slate-300 rounded-md bg-slate-700/50 transition-colors duration-200">Operations</button>
+                    <button id="transactions-tab" class="flex-1 py-2 px-3 text-sm font-medium text-slate-400 rounded-md transition-colors duration-200 hover:bg-slate-700/50" data-disabled="true">Transactions</button>
+                </nav>
+            </div>
+
+            <div class="flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between mt-4">
                 <button id="uploadBtn" class="bg-cyan-500 hover:bg-cyan-600 text-white px-4 py-2 rounded-lg font-medium transition-colors" aria-label="Choose CSV file">Choose CSV…</button>
                 <input type="file" id="csvInput" accept=".csv" hidden>
                 <div class="flex flex-col sm:flex-row gap-4 items-start sm:items-center flex-1">
@@ -87,34 +114,55 @@
                     <select id="concSelect" class="bg-slate-800 border border-slate-600 text-slate-200 px-3 py-2 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500" aria-label="Select concurrency">
                         <option value="ALL">ALL</option>
                     </select>
-                    <span id="status" class="text-sm text-slate-500">No file loaded.</span>
+                    <div class="flex flex-col">
+                        <span id="status" class="text-sm text-slate-500">No file loaded.</span>
+                        <span id="filename" class="text-sm text-slate-600 truncate max-w-xs"></span>
+                    </div>
                 </div>
             </div>
         </div>
 
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <div class="glass rounded-xl p-4">
-                <h3 class="text-lg font-semibold mb-4 text-center">Checkout — ops/s</h3>
-                <div id="checkout-bar" class="w-full h-64"></div>
+        <!-- Operations View -->
+        <div id="operations-view" class="space-y-6">
+            <div class="text-center">
+                <h2 class="text-2xl font-bold text-green-400 mb-2">↑ HIGHER = BETTER</h2>
             </div>
-            <div class="glass rounded-xl p-4">
-                <h3 class="text-lg font-semibold mb-4 text-center">Webhook — ops/s</h3>
-                <div id="webhook-bar" class="w-full h-64"></div>
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <div class="glass rounded-xl p-4 relative">
+                    <h3 class="text-lg font-semibold mb-4 text-center">Checkout — ops/s</h3>
+                    <div id="checkout-bar" class="w-full h-64"></div>
+                </div>
+                <div class="glass rounded-xl p-4 relative">
+                    <h3 class="text-lg font-semibold mb-4 text-center">Webhook — ops/s</h3>
+                    <div id="webhook-bar" class="w-full h-64"></div>
+                </div>
+                <div class="glass rounded-xl p-4 relative">
+                    <h3 class="text-lg font-semibold mb-4 text-center">Checkout — ops/s vs concurrency</h3>
+                    <div id="checkout-line" class="w-full h-64"></div>
+                </div>
+                <div class="glass rounded-xl p-4 relative">
+                    <h3 class="text-lg font-semibold mb-4 text-center">Webhook — ops/s vs concurrency</h3>
+                    <div id="webhook-line" class="w-full h-64"></div>
+                </div>
             </div>
-            <div class="glass rounded-xl p-4">
-                <h3 class="text-lg font-semibold mb-4 text-center">Checkout — ops/s vs concurrency</h3>
-                <div id="checkout-line" class="w-full h-64"></div>
+        </div>
+
+        <!-- Transactions View -->
+        <div id="transactions-view" class="space-y-6 hidden">
+            <div class="text-center">
+                <h2 class="text-2xl font-bold text-red-400 mb-2">↓ LOWER = BETTER</h2>
             </div>
-            <div class="glass rounded-xl p-4">
-                <h3 class="text-lg font-semibold mb-4 text-center">Webhook — ops/s vs concurrency</h3>
-                <div id="webhook-line" class="w-full h-64"></div>
-            </div>
+            <div id="transactions-container" class="space-y-6"></div>
         </div>
     </main>
 
     <script>
         let data = null;
+        let transactionData = null;
         let maximizedChart = null;
+        let currentTab = 'operations';
+        const MS_MULTIPLIER = 1000;
+
         const colors = {
             'PG Only': '#06b6d4',    // Cyan-600 to match Choose CSV button
             'PG Redis': '#ff2d55',   // Neon red-pink for Redis
@@ -127,6 +175,11 @@
         };
         const categories = ['PG Only', 'PG Redis', 'TB Redis'];
         const phases = ['checkout', 'webhook'];
+
+        function calculateTXPerSecond(msValue) {
+            if (msValue <= 0) return 0;
+            return Math.round(1000 / msValue);
+        }
 
         function niceRange(maxVal) {
             if (maxVal <= 0 || !isFinite(maxVal)) return [0, 10];
@@ -240,7 +293,7 @@
                     margin: { t: 20, b: 50, l: 50, r: 20 },
                     showlegend: false,
                     plot_bgcolor: 'rgba(0,0,0,0)',
-                    paper_bgcolor: '#0f172a' // Match Tailwind bg-slate-950
+                    paper_bgcolor: '#0f172a'
                 };
                 Plotly.newPlot(divId, [trace], layout, {
                     responsive: true,
@@ -324,7 +377,7 @@
                 margin: { t: 20, b: 50, l: 50, r: 20 },
                 showlegend: false,
                 plot_bgcolor: 'rgba(0,0,0,0)',
-                paper_bgcolor: '#0f172a' // Match Tailwind bg-slate-950
+                paper_bgcolor: '#0f172a'
             };
             Plotly.newPlot(divId, [trace], layout, {
                 responsive: true,
@@ -452,7 +505,7 @@
             });
         }
 
-        function updateCharts(selectedConc) {
+        function updateOperationsCharts(selectedConc) {
             phases.forEach(phase => {
                 if (data[phase]) {
                     renderBarChart(`${phase}-bar`, phase, selectedConc);
@@ -461,17 +514,394 @@
             });
         }
 
+        function renderTransactionLineChart(divId, transaction, selectedConc) {
+            const x = transactionData.concs || [];
+            const traces = categories.map(cat => ({
+                type: 'scatter',
+                mode: 'lines+markers',
+                name: cat,
+                x: x,
+                y: x.map(conc => (transactionData.means[conc]?.[cat]?.[transaction] || 0) * MS_MULTIPLIER),
+                line: { color: colors[cat] },
+                marker: { color: colors[cat], size: 6 }
+            }));
+
+            const maxY = traces.some(t => t.y.some(y => y > 0)) ? Math.max(...traces.map(t => Math.max(...t.y.filter(y => y > 0)))) : 100;
+            const range = niceRange(maxY);
+
+            const layout = {
+                template: 'plotly_dark',
+                xaxis: {
+                    title: { text: 'Concurrency', font: { color: '#e2e8f0' } },
+                    tickfont: { color: '#e2e8f0' }
+                },
+                yaxis: {
+                    title: { text: `${transaction} (ms)`, font: { color: '#e2e8f0' } },
+                    tickfont: { color: '#e2e8f0' },
+                    range: range,
+                    gridcolor: 'rgba(255,255,255,0.1)'
+                },
+                margin: { t: 20, b: 50, l: 60, r: 20 },
+                plot_bgcolor: 'rgba(0,0,0,0)',
+                paper_bgcolor: '#0f172a',
+                hovermode: 'x unified',
+                hoverlabel: {
+                    bgcolor: 'rgba(15, 23, 42, 0.9)',
+                    font: { color: '#e2e8f0' },
+                    bordercolor: 'rgba(255, 255, 255, 0.2)'
+                },
+                legend: {
+                    orientation: 'h',
+                    yanchor: 'bottom',
+                    y: 1.02,
+                    xanchor: 'right',
+                    x: 1,
+                    font: { color: '#e2e8f0' },
+                    bgcolor: 'rgba(0,0,0,0)'
+                }
+            };
+
+            Plotly.newPlot(divId, traces, layout, {
+                responsive: true,
+                modeBarButtonsToRemove: ['select2d', 'lasso2d'],
+                modeBarButtonsToAdd: [{
+                    name: 'maximize',
+                    icon: {
+                        width: 24,
+                        height: 24,
+                        path: 'M3 3h6v2H5v4H3V3zm12 0h6v6h-2V5h-4V3zm6 12h-6v2h4v4h2v-6zm-18 2h6v6H3v-4h2v-2z'
+                    },
+                    click: function(gd) { toggleMaximize(divId, gd); },
+                    title: 'Maximize Chart'
+                }, {
+                    name: 'restore',
+                    icon: {
+                        width: 24,
+                        height: 24,
+                        path: 'M5 5h14v14H5V5zm2 2v10h10V7H7z'
+                    },
+                    click: function(gd) { toggleMaximize(divId, gd); },
+                    title: 'Restore Chart'
+                }],
+                toImageButtonOptions: {
+                    format: 'png',
+                    filename: `${transaction}_line`,
+                    scale: 1,
+                    width: 800,
+                    height: 600,
+                    backgroundColor: '#0f172a'
+                }
+            }).then(gd => {
+                gd.on('plotly_relayout', () => {
+                    try {
+                        console.log(`Relayout event on ${divId}`);
+                    } catch (e) {
+                        // Silently catch errors
+                    }
+                });
+            });
+        }
+
+        function renderTransactionBarChart(divId, transaction, selectedConc) {
+            const barMeans = {};
+            const barStds = {};
+            const validCategories = [];
+
+            categories.forEach(cat => {
+                let values = [];
+                if (selectedConc === 'ALL') {
+                    const concMeans = transactionData.concs?.map(conc => transactionData.means[conc]?.[cat]?.[transaction]).filter(m => m > 0 && isFinite(m)) || [];
+                    if (concMeans.length > 0) {
+                        const meanOfMeans = concMeans.reduce((a, b) => a + b, 0) / concMeans.length;
+                        const variance = concMeans.reduce((a, b) => a + Math.pow(b - meanOfMeans, 2), 0) / concMeans.length;
+                        const std = Math.sqrt(variance);
+                        values = [meanOfMeans];
+                        barMeans[cat] = meanOfMeans * MS_MULTIPLIER;
+                        barStds[cat] = std * MS_MULTIPLIER;
+                        validCategories.push(cat);
+                    }
+                } else {
+                    const conc = parseInt(selectedConc);
+                    const arr = transactionData.raw?.[conc]?.[cat]?.[transaction] || [];
+                    if (arr.length > 0) {
+                        const mean = arr.reduce((a, b) => a + b, 0) / arr.length;
+                        const variance = arr.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / arr.length;
+                        const std = Math.sqrt(variance);
+                        values = [mean];
+                        barMeans[cat] = mean * MS_MULTIPLIER;
+                        barStds[cat] = std * MS_MULTIPLIER;
+                        validCategories.push(cat);
+                    }
+                }
+                if (values.length === 0) {
+                    barMeans[cat] = 0;
+                    barStds[cat] = 0;
+                }
+            });
+
+            const barY = validCategories.map(cat => isFinite(barMeans[cat]) ? barMeans[cat] : 0);
+            const barError = validCategories.map(cat => isFinite(barStds[cat]) ? barStds[cat] : 0);
+            const maxY = barY.length > 0 ? Math.max(...barY.map((y, i) => y + barError[i])) : 100;
+            let range = niceRange(maxY);
+            range[1] = range[1] * 1.1; // Add 10% headroom for annotations
+
+            // Calculate theoretical TX/s for each category
+            const txPerSecond = validCategories.map(cat => {
+                const msValue = barY[validCategories.indexOf(cat)];
+                return calculateTXPerSecond(msValue);
+            });
+
+            if (validCategories.length === 0) {
+                const trace = {
+                    type: 'bar',
+                    x: categories,
+                    y: [0, 0, 0],
+                    text: ['0.0', '0.0', '0.0'],
+                    textposition: 'auto',
+                    textfont: { color: categories.map(cat => textColors[cat]) },
+                    marker: {
+                        color: categories.map(cat => colors[cat]),
+                        cornerradius: 5
+                    }
+                };
+                const layout = {
+                    template: 'plotly_dark',
+                    xaxis: {
+                        title: { text: 'Category', font: { color: '#e2e8f0' } },
+                        tickfont: { color: '#e2e8f0' },
+                        categoryorder: 'array',
+                        categoryarray: categories
+                    },
+                    yaxis: {
+                        title: { text: `${transaction} (ms)`, font: { color: '#e2e8f0' } },
+                        tickfont: { color: '#e2e8f0' },
+                        range: [0, 100],
+                        gridcolor: 'rgba(255,255,255,0.1)'
+                    },
+                    bargap: 0.3,
+                    margin: { t: 20, b: 50, l: 60, r: 20 },
+                    showlegend: false,
+                    plot_bgcolor: 'rgba(0,0,0,0)',
+                    paper_bgcolor: '#0f172a'
+                };
+                Plotly.newPlot(divId, [trace], layout, {
+                    responsive: true,
+                    modeBarButtonsToRemove: ['select2d', 'lasso2d'],
+                    modeBarButtonsToAdd: [{
+                        name: 'maximize',
+                        icon: {
+                            width: 24,
+                            height: 24,
+                            path: 'M3 3h6v2H5v4H3V3zm12 0h6v6h-2V5h-4V3zm6 12h-6v2h4v4h2v-6zm-18 2h6v6H3v-4h2v-2z'
+                        },
+                        click: function(gd) { toggleMaximize(divId, gd); },
+                        title: 'Maximize Chart'
+                    }, {
+                        name: 'restore',
+                        icon: {
+                            width: 24,
+                            height: 24,
+                            path: 'M5 5h14v14H5V5zm2 2v10h10V7H7z'
+                        },
+                        click: function(gd) { toggleMaximize(divId, gd); },
+                        title: 'Restore Chart'
+                    }],
+                    toImageButtonOptions: {
+                        format: 'png',
+                        filename: `${transaction}_bar`,
+                        scale: 1,
+                        width: 800,
+                        height: 600,
+                        backgroundColor: '#0f172a'
+                    }
+                });
+                return;
+            }
+
+            const trace = {
+                type: 'bar',
+                x: validCategories,
+                y: barY,
+                text: barY.map(y => isFinite(y) ? y.toFixed(1) : '0.0'),
+                textposition: 'auto',
+                textfont: { color: validCategories.map(cat => textColors[cat]) },
+                marker: {
+                    color: validCategories.map(cat => colors[cat]),
+                    cornerradius: 5
+                },
+                error_y: {
+                    visible: true,
+                    type: 'data',
+                    array: barError,
+                    symmetric: false,
+                    arrayminus: barError.map(() => 0),
+                    color: validCategories.map(cat => colors[cat]),
+                    thickness: 1.5,
+                    width: 8
+                }
+            };
+            const layout = {
+                template: 'plotly_dark',
+                xaxis: {
+                    title: { text: 'Category', font: { color: '#e2e8f0' } },
+                    tickfont: { color: '#e2e8f0' },
+                    categoryorder: 'array',
+                    categoryarray: validCategories
+                },
+                yaxis: {
+                    title: { text: `${transaction} (ms)`, font: { color: '#e2e8f0' } },
+                    tickfont: { color: '#e2e8f0' },
+                    range: range,
+                    gridcolor: 'rgba(255,255,255,0.1)'
+                },
+                bargap: 0.3,
+                margin: { t: 20, b: 50, l: 60, r: 20 },
+                showlegend: false,
+                plot_bgcolor: 'rgba(0,0,0,0)',
+                paper_bgcolor: '#0f172a',
+                annotations: validCategories.map((cat, index) => ({
+                    x: cat,
+                    y: barY[index] + barError[index] + (range[1] * 0.02),
+                    xref: 'x',
+                    yref: 'y',
+                    text: `${txPerSecond[index]} TX/s`,
+                    showarrow: false,
+                    font: {
+                        size: 11,
+                        color: '#e2e8f0',
+                        family: 'Inter, ui-sans-serif'
+                    },
+                    bgcolor: 'rgba(15, 23, 42, 0.9)',
+                    bordercolor: 'rgba(255, 255, 255, 0.2)',
+                    borderwidth: 1,
+                    borderpad: 4,
+                    opacity: 0.9
+                }))
+            };
+            Plotly.newPlot(divId, [trace], layout, {
+                responsive: true,
+                modeBarButtonsToRemove: ['select2d', 'lasso2d'],
+                modeBarButtonsToAdd: [{
+                    name: 'maximize',
+                    icon: {
+                        width: 24,
+                        height: 24,
+                        path: 'M3 3h6v2H5v4H3V3zm12 0h6v6h-2V5h-4V3zm6 12h-6v2h4v4h2v-6zm-18 2h6v6H3v-4h2v-2z'
+                    },
+                    click: function(gd) { toggleMaximize(divId, gd); },
+                    title: 'Maximize Chart'
+                }, {
+                    name: 'restore',
+                    icon: {
+                        width: 24,
+                        height: 24,
+                        path: 'M5 5h14v14H5V5zm2 2v10h10V7H7z'
+                    },
+                    click: function(gd) { toggleMaximize(divId, gd); },
+                    title: 'Restore Chart'
+                }],
+                toImageButtonOptions: {
+                    format: 'png',
+                    filename: `${transaction}_bar`,
+                    scale: 1,
+                    width: 800,
+                    height: 600,
+                    backgroundColor: '#0f172a'
+                }
+            });
+        }
+
+        function updateTransactionsView(selectedConc) {
+            const container = document.getElementById('transactions-container');
+            if (!transactionData || !transactionData.transactions.length) {
+                container.innerHTML = '<div class="text-center py-8 text-slate-400">No transaction data available</div>';
+                return;
+            }
+
+            let html = '';
+            transactionData.transactions.forEach(transaction => {
+                const safeName = transaction.replace(/\./g, '-').replace(/:/g, '-');
+                html += `
+                    <div class="glass rounded-xl p-4 relative">
+                        <h3 class="text-lg font-semibold mb-4 text-center">${transaction}</h3>
+                        <div class="transaction-metric">
+                            <div class="w-full h-64">
+                                <div id="trans-line-${safeName}" class="w-full h-full"></div>
+                            </div>
+                            <div class="w-full h-64">
+                                <div id="trans-bar-${safeName}" class="w-full h-full"></div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            });
+            container.innerHTML = html;
+
+            // Render charts after DOM update
+            setTimeout(() => {
+                transactionData.transactions.forEach(transaction => {
+                    const safeName = transaction.replace(/\./g, '-').replace(/:/g, '-');
+                    renderTransactionLineChart(`trans-line-${safeName}`, transaction, selectedConc);
+                    renderTransactionBarChart(`trans-bar-${safeName}`, transaction, selectedConc);
+                });
+            }, 0);
+        }
+
+        function switchTab(tabName) {
+            currentTab = tabName;
+
+            // Update tab buttons
+            document.getElementById('operations-tab').className = tabName === 'operations'
+                ? 'flex-1 py-2 px-3 text-sm font-medium text-white rounded-md bg-cyan-600 transition-colors duration-200'
+                : 'flex-1 py-2 px-3 text-sm font-medium text-slate-300 rounded-md bg-slate-700/50 transition-colors duration-200';
+            document.getElementById('transactions-tab').className = tabName === 'transactions'
+                ? 'flex-1 py-2 px-3 text-sm font-medium text-white rounded-md bg-cyan-600 transition-colors duration-200'
+                : 'flex-1 py-2 px-3 text-sm font-medium text-slate-400 rounded-md transition-colors duration-200 hover:bg-slate-700/50';
+
+            // Show/hide views
+            document.getElementById('operations-view').classList.toggle('hidden', tabName !== 'operations');
+            document.getElementById('transactions-view').classList.toggle('hidden', tabName !== 'transactions');
+
+            // Update charts
+            const selectedConc = document.getElementById('concSelect').value;
+            if (tabName === 'operations' && data) {
+                updateOperationsCharts(selectedConc);
+            } else if (tabName === 'transactions' && transactionData) {
+                updateTransactionsView(selectedConc);
+            }
+        }
+
         document.addEventListener('DOMContentLoaded', () => {
             const uploadBtn = document.getElementById('uploadBtn');
             const fileInput = document.getElementById('csvInput');
             const concSelect = document.getElementById('concSelect');
+            const operationsTab = document.getElementById('operations-tab');
+            const transactionsTab = document.getElementById('transactions-tab');
+            const statusEl = document.getElementById('status');
+            const filenameEl = document.getElementById('filename');
+
+            // Tab switching
+            operationsTab.addEventListener('click', () => switchTab('operations'));
+            transactionsTab.addEventListener('click', () => switchTab('transactions'));
 
             uploadBtn.addEventListener('click', () => fileInput.click());
-            concSelect.addEventListener('change', (e) => updateCharts(e.target.value));
+            concSelect.addEventListener('change', (e) => {
+                const selectedConc = e.target.value;
+                if (currentTab === 'operations' && data) {
+                    updateOperationsCharts(selectedConc);
+                } else if (currentTab === 'transactions' && transactionData) {
+                    updateTransactionsView(selectedConc);
+                }
+            });
 
             fileInput.addEventListener('change', (e) => {
                 const file = e.target.files[0];
                 if (!file) return;
+
+                // Show filename
+                filenameEl.textContent = file.name;
+                filenameEl.className = 'text-sm text-slate-300 truncate max-w-xs font-medium';
+
                 const reader = new FileReader();
                 reader.onload = (ev) => {
                     const text = ev.target.result;
@@ -483,13 +913,19 @@
                         accounting: headers.indexOf('accounting'),
                         payments: headers.indexOf('payments'),
                         concurrency: headers.indexOf('concurrency'),
-                        throughput: headers.indexOf('throughput')
+                        throughput: headers.indexOf('throughput'),
+                        walltime: headers.indexOf('walltime')
                     };
                     if (Object.values(colIdx).some(idx => idx === -1)) return;
 
+                    // Process operations data
                     data = { checkout: {}, webhook: {} };
                     const concSet = new Set();
                     let rowCount = 0;
+
+                    // Process transaction data
+                    const transactionMap = {};
+                    const transactionConcSet = new Set();
 
                     for (let i = 1; i < lines.length; i++) {
                         let row;
@@ -500,9 +936,7 @@
                         }
                         if (row.length <= Math.max(...Object.values(colIdx))) continue;
 
-                        const phase = row[colIdx.phase]?.toLowerCase();
-                        if (!['checkout', 'webhook'].includes(phase)) continue;
-
+                        const phase = row[colIdx.phase];
                         const acc = row[colIdx.accounting]?.toLowerCase();
                         const pay = row[colIdx.payments]?.toLowerCase();
                         let cat;
@@ -518,12 +952,25 @@
                         const thru = parseFloat(row[colIdx.throughput]);
                         if (isNaN(thru)) continue;
 
-                        if (!data[phase][conc]) data[phase][conc] = { 'PG Only': [], 'PG Redis': [], 'TB Redis': [] };
-                        data[phase][conc][cat].push(thru);
-                        rowCount++;
-                        concSet.add(conc);
+                        // Process operations data
+                        if (phase && ['checkout', 'webhook'].includes(phase.toLowerCase())) {
+                            const phaseKey = phase.toLowerCase();
+                            if (!data[phaseKey][conc]) data[phaseKey][conc] = { 'PG Only': [], 'PG Redis': [], 'TB Redis': [] };
+                            data[phaseKey][conc][cat].push(thru);
+                            rowCount++;
+                            concSet.add(conc);
+                        }
+                        // Process transaction data
+                        else if (phase && phase.startsWith('kind:')) {
+                            const transaction = phase.substring(5); // Remove 'kind:' prefix
+                            if (!transactionMap[transaction]) transactionMap[transaction] = {};
+                            if (!transactionMap[transaction][conc]) transactionMap[transaction][conc] = { 'PG Only': [], 'PG Redis': [], 'TB Redis': [] };
+                            transactionMap[transaction][conc][cat].push(thru);
+                            transactionConcSet.add(conc);
+                        }
                     }
 
+                    // Process operations data structure
                     phases.forEach(phase => {
                         if (!data[phase] || Object.keys(data[phase]).length === 0) return;
                         data[phase].concs = Object.keys(data[phase]).map(c => parseInt(c)).sort((a, b) => a - b);
@@ -537,18 +984,61 @@
                         });
                     });
 
-                    const concs = Array.from(concSet).sort((a, b) => a - b);
+                    // Process transaction data structure
+                    transactionData = {
+                        transactions: Object.keys(transactionMap).sort(),
+                        concs: Array.from(transactionConcSet).sort((a, b) => a - b),
+                        raw: {},
+                        means: {}
+                    };
+
+                    // Remap raw data to conc -> cat -> transaction
+                    transactionData.concs.forEach(conc => {
+                        transactionData.raw[conc] = {};
+                        categories.forEach(cat => {
+                            transactionData.raw[conc][cat] = {};
+                            transactionData.transactions.forEach(transaction => {
+                                transactionData.raw[conc][cat][transaction] = transactionMap[transaction]?.[conc]?.[cat] || [];
+                            });
+                        });
+                    });
+
+                    transactionData.concs.forEach(conc => {
+                        transactionData.means[conc] = {};
+                        categories.forEach(cat => {
+                            transactionData.means[conc][cat] = {};
+                            transactionData.transactions.forEach(transaction => {
+                                const arr = transactionData.raw[conc][cat][transaction];
+                                transactionData.means[conc][cat][transaction] = arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
+                            });
+                        });
+                    });
+
+                    // Update concurrency select
+                    const allConcs = Array.from(new Set([...Array.from(concSet), ...Array.from(transactionConcSet)])).sort((a, b) => a - b);
                     concSelect.innerHTML = '<option value="ALL">ALL</option>';
-                    concs.forEach(c => {
+                    allConcs.forEach(c => {
                         const opt = document.createElement('option');
                         opt.value = c.toString();
                         opt.textContent = c.toString();
                         concSelect.appendChild(opt);
                     });
 
-                    document.getElementById('status').textContent = `Loaded ${rowCount} rows.`;
-                    if (data.checkout || data.webhook) {
-                        updateCharts('ALL');
+                    // Enable transactions tab if we have transaction data
+                    if (transactionData.transactions.length > 0) {
+                        transactionsTab.classList.remove('text-slate-400');
+                        transactionsTab.removeAttribute('data-disabled');
+                        transactionsTab.classList.add('text-slate-300');
+                        transactionsTab.classList.add('hover:bg-slate-700/50');
+                    }
+
+                    statusEl.textContent = `Loaded ${rowCount} operations + ${transactionData.transactions.length} transaction types.`;
+
+                    // Update current view
+                    if (currentTab === 'operations' && data) {
+                        updateOperationsCharts('ALL');
+                    } else if (currentTab === 'transactions' && transactionData) {
+                        updateTransactionsView('ALL');
                     }
                 };
                 reader.readAsText(file);
@@ -557,3 +1047,4 @@
     </script>
 </body>
 </html>
+
