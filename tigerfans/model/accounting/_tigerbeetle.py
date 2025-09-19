@@ -1,7 +1,9 @@
 import os
 import tigerbeetle as tb
-from typing import Tuple
+from typing import Tuple, List
 from ...helpers import now_ts, to_iso
+import gc
+import asyncio
 
 # Config
 TicketAmount_Class_A = 5_000_000
@@ -42,6 +44,115 @@ Class_B_budget = tb.Account(
         flags=tb.AccountFlags.DEBITS_MUST_NOT_EXCEED_CREDITS
     )
 Class_B_spent = tb.Account(id=2229, ledger=LedgerTickets, code=20)
+
+
+def debug_event_loop():
+    print(f"🔍 Event loop: {asyncio.get_event_loop()}")
+    print(f"🔍 Current task: {asyncio.current_task()}")
+    print(f"🔍 Pending tasks: {len(asyncio.all_tasks())}")
+
+    # Check for zombie futures
+    futures = []
+    for obj in gc.get_objects():
+        if isinstance(obj, asyncio.Future):
+            futures.append(obj)
+    print(f"🔍 Live futures: {len(futures)}")
+
+    # Check for cancelled tasks
+    cancelled = 0
+    for task in asyncio.all_tasks():
+        if task.cancelled():
+            cancelled += 1
+    print(f"🔍 Cancelled tasks: {cancelled}")
+
+
+class TransferBatcher:
+    def __init__(self, client: tb.ClientAsync, max_batch_size: int = 8190,
+                 flush_timeout: float = 0.1):
+        self.client = client
+        self.max_batch_size = max_batch_size
+        self.flush_timeout = flush_timeout
+        self._lock = asyncio.Lock()
+        self._pending_transfers: List[tb.Transfer] = []
+        self._pending_completions: List[Tuple[int, int, asyncio.Future]] = []
+        self._flush_task: asyncio.Task | None = None
+
+    async def submit(
+        self, transfers: List[tb.Transfer]
+    ) -> List[tb.CreateTransferResult]:
+        # print("submit", [f"id={t.id}" for t in transfers])
+        if not transfers:
+            return []
+
+        async with self._lock:
+            start_index = len(self._pending_transfers)
+            self._pending_transfers.extend(transfers)
+            fut = asyncio.Future()
+            self._pending_completions.append(
+                (start_index, len(transfers), fut)
+            )
+
+            should_flush_now = (
+                len(self._pending_transfers) >= self.max_batch_size
+            )
+            should_schedule_delayed = (
+                self._flush_task is None or self._flush_task.done()
+            )
+
+        if should_flush_now:
+            # print("submit: flushing immediately")
+            await self._flush()
+        elif should_schedule_delayed:
+            # print("submit: scheduling delayed flush")
+            self._flush_task = asyncio.create_task(self._delayed_flush())
+
+        return await fut
+
+    async def _delayed_flush(self) -> None:
+        try:
+            await asyncio.sleep(self.flush_timeout)
+            await self._flush()
+        except asyncio.CancelledError:
+            # Clean cancellation - just exit
+            pass
+        except Exception as e:
+            print(f"_delayed_flush error: {e}")
+
+    async def _flush(self) -> None:
+        # Extract under lock
+        batch = None
+        completions = []
+        async with self._lock:
+            if not self._pending_transfers:
+                return
+            batch = self._pending_transfers[:]
+            completions = self._pending_completions[:]
+            self._pending_transfers = []
+            self._pending_completions = []
+
+            # Safe cancellation: only cancel if it's a different task
+            if (
+                self._flush_task and not self._flush_task.done() and
+                self._flush_task is not asyncio.current_task()
+            ):
+                # print("Safely cancelling previous flush task")
+                self._flush_task.cancel()
+                # Don't await it - let it clean up on its own
+            self._flush_task = None
+
+        # debug_event_loop()
+        error_results = await self.client.create_transfers(batch)
+
+        # Reconstruct full results: None for success, error for failures
+        full_results = [None] * len(batch)
+        for error_result in error_results:
+            full_results[error_result.index] = error_result
+
+        # Resolve futures
+        for start, num, fut in completions:
+            sub_slice = full_results[start:start + num]
+            sub_results = [r for r in sub_slice if r is not None]
+            fut.set_result(sub_results)
 
 
 async def create_accounts(client: tb.ClientAsync):
@@ -113,11 +224,9 @@ async def initial_transfers(client: tb.ClientAsync):
 
 
 async def hold_tickets(
-        client: tb.ClientAsync, ticket_class: str, qty: int,
-        timeout_seconds: int
+    batcher: TransferBatcher, ticket_class: str,
+    qty: int, timeout_seconds: int,
 ) -> Tuple[str, str, bool, bool]:
-    # we issue 2 transfers: one for the actual tickets and one for the goodie
-    # counter
     if ticket_class not in ['A', 'B']:
         raise ValueError("Unknown class " + ticket_class)
 
@@ -131,7 +240,7 @@ async def hold_tickets(
     tb_transfer_id = tb.id()
     goodie_tb_transfer_id = tb.id()
 
-    transfer_errors = await client.create_transfers([
+    transfers = [
         tb.Transfer(
             id=tb_transfer_id,
             debit_account_id=debit_account_id,
@@ -152,7 +261,11 @@ async def hold_tickets(
             timeout=timeout_seconds,
             flags=tb.TransferFlags.PENDING,
         ),
-    ])
+    ]
+
+    print("hold_tickets calling batcher")
+    transfer_errors = await batcher.submit(transfers)
+    print("batcher returned")
 
     has_ticket = True
     has_goodie = True
@@ -165,10 +278,9 @@ async def hold_tickets(
 
 
 async def book_immediately(
-        client: tb.ClientAsync, ticket_class: str, qty: int
+    batcher: TransferBatcher, ticket_class: str,
+    qty: int,
 ) -> Tuple[str, str, bool, bool]:
-    # we issue 2 transfers: one for the actual tickets and one for the goodie
-    # counter
     if ticket_class not in ['A', 'B']:
         raise ValueError("Unknown class " + ticket_class)
 
@@ -182,7 +294,7 @@ async def book_immediately(
     tb_transfer_id = tb.id()
     goodie_tb_transfer_id = tb.id()
 
-    transfer_errors = await client.create_transfers([
+    transfers = [
         tb.Transfer(
             id=tb_transfer_id,
             debit_account_id=debit_account_id,
@@ -199,7 +311,8 @@ async def book_immediately(
             ledger=LedgerTickets,
             code=20,
         ),
-    ])
+    ]
+    transfer_errors = await batcher.submit(transfers)
     has_ticket = True
     has_goodie = True
     for transfer_error in transfer_errors:
@@ -211,9 +324,9 @@ async def book_immediately(
 
 
 async def commit_order(
-        client: tb.ClientAsync, tb_transfer_id: str | int,
-        goodie_tb_transfer_id: str | int, ticket_class: str, qty: int,
-        try_goodie: bool
+    batcher: TransferBatcher,
+    tb_transfer_id: str | int, goodie_tb_transfer_id: str | int,
+    ticket_class: str, qty: int, try_goodie: bool,
 ) -> Tuple[bool, bool]:
     if ticket_class not in ['A', 'B']:
         raise ValueError("Unknown class " + ticket_class)
@@ -246,7 +359,6 @@ async def commit_order(
         ),
     ]
 
-    # only commit goodie if it hasn't failed before
     if try_goodie:
         transfers.append(
             tb.Transfer(
@@ -260,7 +372,7 @@ async def commit_order(
                 flags=tb.TransferFlags.POST_PENDING_TRANSFER,
             )
         )
-    transfer_errors = await client.create_transfers(transfers)
+    transfer_errors = await batcher.submit(transfers)
 
     has_ticket = True
     has_goodie = try_goodie
@@ -274,13 +386,13 @@ async def commit_order(
 
 
 async def cancel_only_goodie(
-        client: tb.ClientAsync,
-        goodie_tb_transfer_id: str | int
+    batcher: TransferBatcher,
+    goodie_tb_transfer_id: str | int
 ) -> None:
     if isinstance(goodie_tb_transfer_id, str):
         goodie_tb_transfer_id = int(goodie_tb_transfer_id)
     id_void_goodies = tb.id()
-    transfer_errors = await client.create_transfers([
+    transfers = [
         tb.Transfer(
             id=id_void_goodies,
             debit_account_id=First_n_budget.id,
@@ -291,7 +403,8 @@ async def cancel_only_goodie(
             code=20,
             flags=tb.TransferFlags.VOID_PENDING_TRANSFER,
         ),
-    ])
+    ]
+    transfer_errors = await batcher.submit(transfers)
     if transfer_errors:
         # we don't really care
         pass
@@ -299,8 +412,9 @@ async def cancel_only_goodie(
 
 
 async def cancel_order(
-        client: tb.ClientAsync, tb_transfer_id: str | int,
-        goodie_tb_transfer_id: str | int, ticket_class: str, qty: int
+    batcher: TransferBatcher,
+    tb_transfer_id: str | int, goodie_tb_transfer_id: str | int,
+    ticket_class: str, qty: int,
 ) -> None:
     if ticket_class not in ['A', 'B']:
         raise ValueError("Unknown class " + ticket_class)
@@ -320,7 +434,7 @@ async def cancel_order(
     id_void = tb.id()
     id_void_goodies = tb.id()
 
-    transfer_errors = await client.create_transfers([
+    transfers = [
         tb.Transfer(
             id=id_void,
             debit_account_id=debit_account_id,
@@ -341,7 +455,9 @@ async def cancel_order(
             code=20,
             flags=tb.TransferFlags.VOID_PENDING_TRANSFER,
         ),
-    ])
+    ]
+
+    transfer_errors = await batcher.submit(transfers)
 
     if transfer_errors:
         # we don't really care

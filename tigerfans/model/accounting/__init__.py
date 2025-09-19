@@ -14,7 +14,7 @@ if BACKEND == "pg":
 else:
     from ._tigerbeetle import (
         create_accounts, initial_transfers, hold_tickets, commit_order,
-        cancel_order, cancel_only_goodie, compute_inventory, count_goodies
+        cancel_order, cancel_only_goodie, compute_inventory, count_goodies,
     )
 
 

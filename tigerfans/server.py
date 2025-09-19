@@ -13,13 +13,14 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from .infra.sql import make_async_engine
-from .infra.timings import install_shutdown_flush, timeit, record_timing
+from .infra.timings import install_shutdown_flush, timeit
 
 
 from .model.order import Base, Order
 from .model import accounting
 from .model.accounting import TicketAmount_first_n, BACKEND as ACCT_BACKEND
 from .model.accounting import create_accounts, initial_transfers
+from .model.accounting._tigerbeetle import TransferBatcher
 from .model.accounting._postgres import GatedAsyncSession
 from .model.paymentsession import (
         PaymentSessionStore, new_store, BACKEND as PAYSESSION_BACKEND
@@ -97,6 +98,15 @@ def get_tb_client() -> tb.ClientAsync:
     return client
 
 
+def get_tb_batcher() -> TransferBatcher:
+    if ACCT_BACKEND != "tb":
+        raise RuntimeError("TigerBeetle backend not enabled")
+    batcher = getattr(app.state, "tb_batcher", None)
+    if batcher is None:
+        raise RuntimeError("TigerBeetle batcher not initialized")
+    return batcher
+
+
 async def paymentsessions() -> PaymentSessionStore:
     if PAYSESSION_BACKEND == 'pg':
         conn: AsyncConnection
@@ -112,6 +122,14 @@ async def accounting_client() -> tb.ClientAsync | AsyncSession:
             yield GatedAsyncSession(session=session, gated=gated)
     else:
         yield get_tb_client()
+
+
+async def batched_accounting_client() -> TransferBatcher | AsyncSession:
+    if ACCT_BACKEND == 'pg':
+        async with SessionAsync() as session:
+            yield GatedAsyncSession(session=session, gated=gated)
+    else:
+        yield get_tb_batcher()
 
 
 # ---
@@ -173,7 +191,12 @@ async def _accounting_start():
         addr = os.getenv("TB_ADDRESS", "3000")
         cluster_id = int(os.getenv("TB_CLUSTER_ID", "0"))
         client = tb.ClientAsync(cluster_id=cluster_id, replica_addresses=addr)
+        tb_batch_timeout = int(
+            os.getenv("TB_BATCHER_TIMEOUT_MS", "100")
+        ) / 1000
+        batcher = TransferBatcher(client, flush_timeout=tb_batch_timeout)
         app.state.tb_client = client
+        app.state.tb_batcher = batcher
         if await create_accounts(client):
             await initial_transfers(client)
 
@@ -267,7 +290,7 @@ async def demo_checkout_page(request: Request, status: Optional[str] = None,
 @app.post("/api/checkout")
 async def create_checkout(
     payload: dict,
-    ac: tb.ClientAsync | AsyncSession = Depends(accounting_client),
+    ac: TransferBatcher | AsyncSession = Depends(batched_accounting_client),
     rs: PaymentSessionStore = Depends(paymentsessions),
 ):
     cls = payload.get("cls")
@@ -367,7 +390,7 @@ async def get_order(order_id: str, db: AsyncSession = Depends(get_db)):
 async def payments_webhook(
     request: Request,
     db: AsyncSession = Depends(get_db),
-    ac: tb.ClientAsync | AsyncSession = Depends(accounting_client),
+    ac: TransferBatcher | AsyncSession = Depends(batched_accounting_client),
     rs: PaymentSessionStore = Depends(paymentsessions),
 ):
     payload = await request.body()
