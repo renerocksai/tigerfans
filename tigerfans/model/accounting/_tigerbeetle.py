@@ -263,9 +263,7 @@ async def hold_tickets(
         ),
     ]
 
-    print("hold_tickets calling batcher")
     transfer_errors = await batcher.submit(transfers)
-    print("batcher returned")
 
     has_ticket = True
     has_goodie = True
