@@ -6,12 +6,11 @@ import time
 from typing import Callable, AsyncContextManager
 
 
-
 # ------------------------------------------------------------------------------
 # DDL (idempotent) + fixtures
 # ------------------------------------------------------------------------------
 SQL_CREATE_PAYMENT_SESSIONS_HOT = r"""
--- payment sessions (the “hot” reservation metadata you currently put in Redis)
+-- payment sessions (the “hot” reservation metadata we currently put in Redis)
 CREATE TABLE IF NOT EXISTS payment_sessions_hot (
   psid         TEXT PRIMARY KEY,
   order_id     TEXT NOT NULL,

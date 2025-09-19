@@ -29,7 +29,7 @@ class GatedAsyncSession:
 
 
 # ------------------------------------------------------------------------------
-# CONFIG: keep in sync with your TB demo numbers if you want apples-to-apples
+# CONFIG: keep in sync with TB demo numbers if you want apples-to-apples
 # ------------------------------------------------------------------------------
 TicketAmount_Class_A = 5_000_000
 TicketAmount_Class_B = 5_000_000

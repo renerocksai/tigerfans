@@ -13,6 +13,9 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from .infra.sql import make_async_engine
+from .infra.timings import install_shutdown_flush, timeit, record_timing
+
+
 from .model.order import Base, Order
 from .model import accounting
 from .model.accounting import TicketAmount_first_n, BACKEND as ACCT_BACKEND
@@ -80,6 +83,9 @@ app = FastAPI(
 )
 app.mount("/static", StaticFiles(directory="tigerfans/static"), name="static")
 app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET)
+
+# shutdown handler trying to post our detailed timings
+install_shutdown_flush(app)
 
 
 def get_tb_client() -> tb.ClientAsync:
@@ -279,15 +285,17 @@ async def create_checkout(
     if cls not in TICKET_CLASSES:
         raise HTTPException(400, detail="invalid ticket class")
 
-    tb_transfer_id, goodie_tb_transfer_id, ticket_ok, goodie_ok = (
-            await accounting.hold_tickets(ac, cls, qty,
-                                          RESERVATION_TTL_SECONDS)
-    )
+    async with timeit("accounting.hold"):
+        tb_transfer_id, goodie_tb_transfer_id, ticket_ok, goodie_ok = (
+                await accounting.hold_tickets(ac, cls, qty,
+                                              RESERVATION_TTL_SECONDS)
+        )
     if not ticket_ok:
         if goodie_ok:
             # cancel the goodie ticket reservation so it doesn't need to
             # time out
-            await accounting.cancel_only_goodie(ac, goodie_tb_transfer_id)
+            async with timeit("accounting.cancel_goodie"):
+                await accounting.cancel_only_goodie(ac, goodie_tb_transfer_id)
         raise RuntimeError("Sold Out")
 
     amount = TICKET_CLASSES[cls]["price"] * qty
@@ -296,18 +304,19 @@ async def create_checkout(
     order_id = uuid.uuid4().hex
     currency = "eur"
 
-    await rs.save_payment_session(psid, {
-        "order_id": order_id,
-        "cls": cls,
-        "qty": "1",
-        "customer_email": customer_email,
-        "tb_transfer_id": str(tb_transfer_id),
-        "goodie_tb_transfer_id": str(goodie_tb_transfer_id),
-        "try_goodie": "1" if goodie_ok else "0",
-        "amount": str(amount),
-        "currency": "eur",
-        "created_at": str(now_ts()),
-    })
+    async with timeit("paymentsession.save"):
+        await rs.save_payment_session(psid, {
+            "order_id": order_id,
+            "cls": cls,
+            "qty": "1",
+            "customer_email": customer_email,
+            "tb_transfer_id": str(tb_transfer_id),
+            "goodie_tb_transfer_id": str(goodie_tb_transfer_id),
+            "try_goodie": "1" if goodie_ok else "0",
+            "amount": str(amount),
+            "currency": "eur",
+            "created_at": str(now_ts()),
+        })
 
     return {
         "order_id": order_id,
@@ -323,16 +332,17 @@ async def create_checkout(
 @app.get("/api/orders/{order_id}")
 async def get_order(order_id: str, db: AsyncSession = Depends(get_db)):
     # DB-GATE!!!
-    async with gated():
-        async with db.begin():
-            result = await db.execute(
-                text("""
-                    SELECT id, status, cls, qty, amount, currency, paid_at,
-                           ticket_code, got_goodie
-                    FROM orders WHERE id = :id
-                """),
-                {"id": order_id},
-            )
+    async with timeit("db.get_order"):
+        async with gated():
+            async with db.begin():
+                result = await db.execute(
+                    text("""
+                        SELECT id, status, cls, qty, amount, currency, paid_at,
+                               ticket_code, got_goodie
+                        FROM orders WHERE id = :id
+                    """),
+                    {"id": order_id},
+                )
     row = result.mappings().first()
     if not row:
         # not created yet (webhook still processing) -> let client keep polling
@@ -369,12 +379,14 @@ async def payments_webhook(
     if not psid:
         raise HTTPException(400, detail="missing payment_session_id")
 
-    ps = await rs.get_payment_session(psid)
+    async with timeit("paymentsession.get"):
+        ps = await rs.get_payment_session(psid)
     if not ps:
         raise HTTPException(404, detail="payment session not found")
 
     # Combined guard (one durable tx on PG; 1–2 RTT on Redis)
-    flags = await rs.fulfill_and_mark_event(psid, idem)
+    async with timeit("paymentsession.fulfill"):
+        flags = await rs.fulfill_and_mark_event(psid, idem)
 
     # Short-circuit exactly like before:
     # - already_fulfilled -> skip
@@ -398,33 +410,37 @@ async def payments_webhook(
     gets_goodie = False
 
     if kind == "succeeded":
-        gets_ticket, gets_goodie = await accounting.commit_order(
-            ac,
-            tb_transfer_id,
-            goodie_tb_transfer_id,
-            cls,
-            qty,
-            try_goodie,
-        )
+        async with timeit("accounting.commit_order"):
+            gets_ticket, gets_goodie = await accounting.commit_order(
+                ac,
+                tb_transfer_id,
+                goodie_tb_transfer_id,
+                cls,
+                qty,
+                try_goodie,
+            )
 
         # Late-success best effort
         if not gets_ticket:
-            (
-                tb2, goodie2, gets_ticket2, gets_goodie2
-            ) = await accounting.book_immediately(ac, cls, qty)
-            if gets_ticket2:
-                gets_ticket = True
-                gets_goodie = gets_goodie or gets_goodie2
-                # (Optional) We *could* add a method to PaymentSessionStore to
-                # update these IDs in Redis, but it's not required anymore
-                # since we’re about to persist to Postgres.
+            async with timeit("accounting.book_immediately"):
+                (
+                    tb2, goodie2, gets_ticket2, gets_goodie2
+                ) = await accounting.book_immediately(ac, cls, qty)
+                if gets_ticket2:
+                    gets_ticket = True
+                    gets_goodie = gets_goodie or gets_goodie2
+                    # (Optional) We *could* add a method to PaymentSessionStore
+                    # to update these IDs in Redis, but it's not required
+                    # anymore since we’re about to persist to Postgres.
     elif kind in ("failed", "canceled"):
-        await accounting.cancel_order(
-            ac, tb_transfer_id, goodie_tb_transfer_id, cls, qty
-        )
+        async with timeit("accounting.cancel_order"):
+            await accounting.cancel_order(
+                ac, tb_transfer_id, goodie_tb_transfer_id, cls, qty
+            )
         # No durable write needed for failure/cancel (by design of the hybrid)
         # but we don't forget to flush!
-        await rs.remove_pending(psid)
+        async with timeit("paymentsession.remove_pending"):
+            await rs.remove_pending(psid)
 
     # --- Durable write to Postgres (success path) ---
     if kind == "succeeded":
@@ -435,29 +451,32 @@ async def payments_webhook(
 
         try:
             # DB GATE
-            async with gated():
-                async with db.begin():
-                    db.add(Order(
-                        id=order_id,
-                        tb_transfer_id=str(tb_transfer_id),
-                        goodie_tb_transfer_id=str(goodie_tb_transfer_id),
-                        try_goodie=try_goodie,
-                        cls=cls,
-                        qty=qty,
-                        amount=amount,
-                        currency=currency,
-                        customer_email=email,
-                        created_at=now_ts(),   # or carry from ps["created_at"]
-                        status=status,
-                        paid_at=now_ts(),
-                        ticket_code=ticket_code,
-                        got_goodie=bool(gets_goodie),
-                    ))
+            async with timeit("db.add_order"):
+                async with gated():
+                    async with db.begin():
+                        db.add(Order(
+                            id=order_id,
+                            tb_transfer_id=str(tb_transfer_id),
+                            goodie_tb_transfer_id=str(goodie_tb_transfer_id),
+                            try_goodie=try_goodie,
+                            cls=cls,
+                            qty=qty,
+                            amount=amount,
+                            currency=currency,
+                            customer_email=email,
+                            created_at=now_ts(),
+                            status=status,
+                            paid_at=now_ts(),
+                            ticket_code=ticket_code,
+                            got_goodie=bool(gets_goodie),
+                        ))
         except IntegrityError:
             # If we see this, it’s an idempotent replay racing the first write.
-            await db.rollback()
+            async with timeit("db.rollback"):
+                await db.rollback()
         # don't forget to flush!
-        await rs.remove_pending(psid)
+        async with timeit("paymentsession.remove_pending"):
+            await rs.remove_pending(psid)
         return {"ok": True, "order_status": status}
 
     # failed/canceled
@@ -539,7 +558,8 @@ async def mockpay_screen(
     db: AsyncSession = Depends(get_db),
     rs: PaymentSessionStore = Depends(paymentsessions),
 ):
-    ps = await rs.get_payment_session(psid)
+    async with timeit("paymentsession.get"):
+        ps = await rs.get_payment_session(psid)
     if not ps:
         raise HTTPException(404, "payment session not found")
     return templates.TemplateResponse("mockpay.html", {
@@ -564,7 +584,8 @@ async def mockpay_emit(
     if kind not in {"succeeded", "failed", "canceled"}:
         raise HTTPException(400, detail="invalid kind")
 
-    ps = await rs.get_payment_session(psid)
+    async with timeit("paymentsession.get"):
+        ps = await rs.get_payment_session(psid)
     if not ps:
         raise HTTPException(404, "payment session not found")
 
