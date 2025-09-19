@@ -13,6 +13,7 @@ import time
 from datetime import datetime, timezone
 from dataclasses import dataclass, asdict
 from typing import List, Optional, Tuple
+import traceback
 
 import httpx
 
@@ -40,6 +41,12 @@ class CheckoutResult:
 
 
 @dataclass
+class AccountingResult:
+    tb_transfer_id: str
+    goodie_tb_transfer_id: str
+
+
+@dataclass
 class Summary:
     total: int = 0
     ok: int = 0
@@ -51,6 +58,7 @@ class Summary:
 def write_csv(
     csv: str, tag: str, concurrency: int, webhook_mode: str, succeed_rate: float,
     checkout_summary: Summary, webhook_summary: Summary,
+    reserve_summary, commit_summary,
     accounting_backend: str, paymentsessions_backend: str,
     db_pool_size: int, redis_max_conn: int,
 ):
@@ -87,6 +95,28 @@ def write_csv(
                 f'{succeed_rate},{webhook_summary.total},'
                 f'{webhook_summary.ok},{webhook_summary.errors},'
                 f'{webhook_summary.wall_time},{webhook_summary.throughput}'
+                '\n'
+            )
+        if reserve_summary:
+            f.write(
+                f'{timestamp},{tag},reserve,{accounting_backend},'
+                f'{paymentsessions_backend},{concurrency},'
+                f'{db_pool_size},{redis_max_conn},'
+                f'{webhook_mode},'
+                f'{succeed_rate},{reserve_summary.total},'
+                f'{reserve_summary.ok},{reserve_summary.errors},'
+                f'{reserve_summary.wall_time},{reserve_summary.throughput}'
+                '\n'
+            )
+        if commit_summary:
+            f.write(
+                f'{timestamp},{tag},commit,{accounting_backend},'
+                f'{paymentsessions_backend},{concurrency},'
+                f'{db_pool_size},{redis_max_conn},'
+                f'{webhook_mode},'
+                f'{succeed_rate},{commit_summary.total},'
+                f'{commit_summary.ok},{commit_summary.errors},'
+                f'{commit_summary.wall_time},{commit_summary.throughput}'
                 '\n'
             )
 
@@ -261,6 +291,112 @@ async def phase_webhook(
     return sessions, summary
 
 
+async def phase_accounting_reserve(
+        base: str, total: int, conc: int
+) -> Tuple[List[CheckoutResult], Summary]:
+    results: List[CheckoutResult] = []
+    errors = 0
+    limits = httpx.Limits(max_connections=conc, max_keepalive_connections=conc)
+    async with httpx.AsyncClient(
+        base_url=base, timeout=10.0, limits=limits
+    ) as client:
+        sem = asyncio.Semaphore(conc)
+
+        async def one(i: int):
+            nonlocal errors
+            async with sem:
+                try:
+                    r = await client.get("/api/accounting/reserve")
+                    r.raise_for_status()
+                    j = r.json()
+                    tb_transfer_id = j["tb_transfer_id"]
+                    goodie_tb_transfer_id = j["goodie_tb_transfer_id"]
+                    results.append(
+                        AccountingResult(
+                            tb_transfer_id=tb_transfer_id,
+                            goodie_tb_transfer_id=goodie_tb_transfer_id
+                        )
+                    )
+                except Exception:
+                    errors += 1
+
+        t0 = time.perf_counter()
+        await asyncio.gather(*(one(i) for i in range(total)))
+        dt = time.perf_counter() - t0
+
+    ok = len(results)
+    print("\n=== Phase 3: Accounting / Reservations ===")
+    print(f"Total: {total}   OK: {ok}   ERROR: {errors}")
+    print(f"Wall time: {dt:.3f}s   Throughput: {ok/dt:.1f} ops/s")
+
+    summary = Summary(
+        total=total,
+        ok=ok,
+        errors=errors,
+        wall_time=dt,
+        throughput=ok/dt,
+    )
+    return results, summary
+
+
+async def phase_accounting_commit(
+        base: str, sessions: List[AccountingResult], conc: int,
+) -> Tuple[List[AccountingResult], Summary]:
+    results: List[CheckoutResult] = []
+    errors = 0
+    limits = httpx.Limits(max_connections=conc, max_keepalive_connections=conc)
+    async with httpx.AsyncClient(
+        base_url=base, timeout=10.0, limits=limits
+    ) as client:
+        sem = asyncio.Semaphore(conc)
+
+        async def one(sess: AccountingResult):
+            nonlocal errors
+            async with sem:
+                try:
+                    r = await client.get(
+                        "/api/accounting/commit",
+                        params={
+                            'tb_transfer_id': sess.tb_transfer_id,
+                            'goodie_tb_transfer_id': sess.goodie_tb_transfer_id,
+                        }
+                    )
+                    r.raise_for_status()
+                    j = r.json()
+                    tb_transfer_id = j["tb_transfer_id"]
+                    goodie_tb_transfer_id = j["goodie_tb_transfer_id"]
+                    results.append(
+                        AccountingResult(
+                            tb_transfer_id=tb_transfer_id,
+                            goodie_tb_transfer_id=goodie_tb_transfer_id
+                        )
+                    )
+                except Exception:
+                    errors += 1
+                    # traceback.print_exc(file=sys.stderr)   # full stacktrace
+
+        total = len(sessions)
+        t0 = time.perf_counter()
+        for start in range(0, total, conc):
+            batch = [one(s) for s in sessions[start:start + conc]]
+            await asyncio.gather(*batch)
+        dt = time.perf_counter() - t0
+
+    ok = len(results)
+    print("\n=== Phase 4: Accounting / Commits ===")
+    print(f"Total: {total}   OK: {ok}   ERROR: {errors}")
+    print(f"Wall time: {dt:.3f}s   Throughput: {ok/dt:.1f} ops/s")
+
+    summary = Summary(
+        total=total,
+        ok=ok,
+        errors=errors,
+        wall_time=dt,
+        throughput=ok/dt,
+    )
+    return results, summary
+
+
 def save_sessions(path: str, sessions: List[CheckoutResult]) -> None:
     with open(path, "w") as f:
         json.dump([asdict(s) for s in sessions], f)
@@ -282,8 +418,11 @@ async def main():
                     help="Total operations per phase")
     ap.add_argument("--concurrency", type=int, default=30,
                     help="Concurrent clients")
-    ap.add_argument("--phase", choices=["both", "checkout", "webhook"],
-                    default="both", help='Which phase to run (default: both)')
+    ap.add_argument("--phase",
+                    choices=[
+                        "all", "checkout", "webhook", "reserve", "commit"
+                    ],
+                    default="all", help='Which phase to run (default: all)')
     ap.add_argument("--succeed-rate", type=float, default=1.0,
                     help="Payment success probability for phase 2")
     ap.add_argument("--webhook-mode", choices=["emit", "direct"],
@@ -314,8 +453,9 @@ async def main():
     args = ap.parse_args()
 
     sessions: List[CheckoutResult] = []
+    accounting_sessions: List[AccountingResult] = []
 
-    if args.phase in ("both", "checkout") and not args.load:
+    if args.phase in ("all", "checkout") and not args.load:
         sessions, checkout_summary = await phase_checkout(
             args.base, args.total, args.concurrency
         )
@@ -323,7 +463,7 @@ async def main():
             save_sessions(args.save, sessions)
 
     webhook_summary = None
-    if args.phase in ("both", "webhook"):
+    if args.phase in ("all", "webhook"):
         if args.load and not sessions:
             sessions = load_sessions(args.load)
         checkouts, webhook_summary = await phase_webhook(
@@ -339,10 +479,30 @@ async def main():
         if not sessions:
             print("No sessions available. Run checkout phase or "
                   "provide --load file.")
+
+    if args.phase in ("all", "reserve"):
+        # print it after trying for nicer output in logs
+        accounting_sessions, reserve_summary = await phase_accounting_reserve(
+            args.base, args.total, args.concurrency
+        )
+
+    commit_summary = None
+    if args.phase in ("all", "commit"):
+        if accounting_sessions:
+            _, commit_summary = await phase_accounting_commit(
+                base=args.base,
+                sessions=accounting_sessions,
+                conc=args.concurrency,
+            )
+        else:
+            print("No accounting sessions available. Run reserve phase, too")
+
     if args.csv:
         write_csv(
             args.csv, args.tag, args.concurrency, args.webhook_mode,
-            args.succeed_rate, checkout_summary, webhook_summary,
+            args.succeed_rate,
+            checkout_summary, webhook_summary,
+            reserve_summary, commit_summary,
             args.accounting, args.payments,
             args.db_pool_size, args.redis_max_conn,
         )

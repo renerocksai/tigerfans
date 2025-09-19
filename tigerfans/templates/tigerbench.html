@@ -127,6 +127,32 @@
             <div class="text-center">
                 <h2 class="text-2xl font-bold text-green-400 mb-2">↑ HIGHER = BETTER</h2>
             </div>
+
+            <!-- Reserve & Commit Bar Charts -->
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <div class="glass rounded-xl p-4 relative">
+                    <h3 class="text-lg font-semibold mb-4 text-center">Reserve — ops/s</h3>
+                    <div id="reserve-bar" class="w-full h-64"></div>
+                </div>
+                <div class="glass rounded-xl p-4 relative">
+                    <h3 class="text-lg font-semibold mb-4 text-center">Commit — ops/s</h3>
+                    <div id="commit-bar" class="w-full h-64"></div>
+                </div>
+            </div>
+
+            <!-- Reserve & Commit Line Charts -->
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <div class="glass rounded-xl p-4 relative">
+                    <h3 class="text-lg font-semibold mb-4 text-center">Reserve — ops/s vs concurrency</h3>
+                    <div id="reserve-line" class="w-full h-64"></div>
+                </div>
+                <div class="glass rounded-xl p-4 relative">
+                    <h3 class="text-lg font-semibold mb-4 text-center">Commit — ops/s vs concurrency</h3>
+                    <div id="commit-line" class="w-full h-64"></div>
+                </div>
+            </div>
+
+            <!-- Checkout & Webhook Bar Charts -->
             <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 <div class="glass rounded-xl p-4 relative">
                     <h3 class="text-lg font-semibold mb-4 text-center">Checkout — ops/s</h3>
@@ -136,6 +162,10 @@
                     <h3 class="text-lg font-semibold mb-4 text-center">Webhook — ops/s</h3>
                     <div id="webhook-bar" class="w-full h-64"></div>
                 </div>
+            </div>
+
+            <!-- Checkout & Webhook Line Charts -->
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 <div class="glass rounded-xl p-4 relative">
                     <h3 class="text-lg font-semibold mb-4 text-center">Checkout — ops/s vs concurrency</h3>
                     <div id="checkout-line" class="w-full h-64"></div>
@@ -174,7 +204,7 @@
             'TB Redis': '#1e293b'    // slate-900 for yellow
         };
         const categories = ['PG Only', 'PG Redis', 'TB Redis'];
-        const phases = ['checkout', 'webhook'];
+        const phases = ['reserve', 'commit', 'checkout', 'webhook'];
 
         function calculateTXPerSecond(msValue) {
             if (msValue <= 0) return 0;
@@ -918,8 +948,8 @@
                     };
                     if (Object.values(colIdx).some(idx => idx === -1)) return;
 
-                    // Process operations data
-                    data = { checkout: {}, webhook: {} };
+                    // Process operations data - initialize all four phases
+                    data = { reserve: {}, commit: {}, checkout: {}, webhook: {} };
                     const concSet = new Set();
                     let rowCount = 0;
 
@@ -952,9 +982,10 @@
                         const thru = parseFloat(row[colIdx.throughput]);
                         if (isNaN(thru)) continue;
 
-                        // Process operations data
-                        if (phase && ['checkout', 'webhook'].includes(phase.toLowerCase())) {
+                        // Process operations data - updated to handle all four phases
+                        if (phase && ['reserve', 'commit', 'checkout', 'webhook'].includes(phase.toLowerCase())) {
                             const phaseKey = phase.toLowerCase();
+                            if (!data[phaseKey]) data[phaseKey] = {};
                             if (!data[phaseKey][conc]) data[phaseKey][conc] = { 'PG Only': [], 'PG Redis': [], 'TB Redis': [] };
                             data[phaseKey][conc][cat].push(thru);
                             rowCount++;
@@ -970,7 +1001,7 @@
                         }
                     }
 
-                    // Process operations data structure
+                    // Process operations data structure - updated for all phases
                     phases.forEach(phase => {
                         if (!data[phase] || Object.keys(data[phase]).length === 0) return;
                         data[phase].concs = Object.keys(data[phase]).map(c => parseInt(c)).sort((a, b) => a - b);

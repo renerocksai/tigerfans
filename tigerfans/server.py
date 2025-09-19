@@ -98,7 +98,7 @@ def get_tb_client() -> tb.ClientAsync:
     return client
 
 
-def get_tb_batcher() -> TransferBatcher:
+def get_tb_batcher() -> ChainedTransferBatcher:
     if ACCT_BACKEND != "tb":
         raise RuntimeError("TigerBeetle backend not enabled")
     batcher = getattr(app.state, "tb_batcher", None)
@@ -124,7 +124,7 @@ async def accounting_client() -> tb.ClientAsync | AsyncSession:
         yield get_tb_client()
 
 
-async def batched_accounting_client() -> TransferBatcher | AsyncSession:
+async def batched_accounting_client() -> ChainedTransferBatcher | AsyncSession:
     if ACCT_BACKEND == 'pg':
         async with SessionAsync() as session:
             yield GatedAsyncSession(session=session, gated=gated)
@@ -287,7 +287,7 @@ async def demo_checkout_page(request: Request, status: Optional[str] = None,
 @app.post("/api/checkout")
 async def create_checkout(
     payload: dict,
-    ac: TransferBatcher | AsyncSession = Depends(batched_accounting_client),
+    ac: ChainedTransferBatcher | AsyncSession = Depends(batched_accounting_client),
     rs: PaymentSessionStore = Depends(paymentsessions),
 ):
     cls = payload.get("cls")
@@ -346,6 +346,47 @@ async def create_checkout(
     }
 
 
+#  this endpoint is purely for measuring accounting performance
+@app.get("/api/accounting/reserve")
+async def perftest_accounting_reserve(
+    ac: ChainedTransferBatcher | AsyncSession = Depends(batched_accounting_client),
+):
+    async with timeit("accounting.hold"):
+        tb_transfer_id, goodie_tb_transfer_id, ticket_ok, goodie_ok = (
+                await accounting.hold_tickets(
+                    ac, 'A', 1, RESERVATION_TTL_SECONDS
+                )
+        )
+
+    return {
+        "tb_transfer_id": str(tb_transfer_id),
+        "goodie_tb_transfer_id": str(goodie_tb_transfer_id),
+    }
+
+
+#  this endpoint is purely for measuring accounting performance
+@app.get("/api/accounting/commit")
+async def perftest_accounting_commit(
+    tb_transfer_id: str, goodie_tb_transfer_id: str,
+    ac: ChainedTransferBatcher | AsyncSession = Depends(batched_accounting_client),
+):
+
+    async with timeit("accounting.commit_order"):
+        gets_ticket, gets_goodie = await accounting.commit_order(
+            ac,
+            tb_transfer_id,
+            goodie_tb_transfer_id,
+            'A',
+            1,
+            True,
+        )
+
+    return {
+        "tb_transfer_id": tb_transfer_id,
+        "goodie_tb_transfer_id": goodie_tb_transfer_id,
+    }
+
+
 # ----------------------------
 # API: Order status (polled by success page)
 # ----------------------------
@@ -387,7 +428,7 @@ async def get_order(order_id: str, db: AsyncSession = Depends(get_db)):
 async def payments_webhook(
     request: Request,
     db: AsyncSession = Depends(get_db),
-    ac: TransferBatcher | AsyncSession = Depends(batched_accounting_client),
+    ac: ChainedTransferBatcher | AsyncSession = Depends(batched_accounting_client),
     rs: PaymentSessionStore = Depends(paymentsessions),
 ):
     payload = await request.body()
