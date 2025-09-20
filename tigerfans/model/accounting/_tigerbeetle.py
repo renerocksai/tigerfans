@@ -2,6 +2,7 @@ import os
 import tigerbeetle as tb
 from typing import Tuple, List
 from ...helpers import now_ts, to_iso
+from ...infra.timings import record_timing
 import gc
 import asyncio
 
@@ -169,6 +170,7 @@ class LiveBatcher:
             # print(f"Processing unified batch of {len(batch)} transfers")
 
             # Network call
+            record_timing('tb.batch_size', len(batch))
             error_results = await self.client.create_transfers(batch)
             # print(f"Batch complete: {len(error_results)} errors")
 
