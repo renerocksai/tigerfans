@@ -192,6 +192,7 @@
         let maximizedChart = null;
         let currentTab = 'operations';
         const MS_MULTIPLIER = 1000;
+        const BATCH_SIZE_TRANSACTION = 'tb.batch_size';
 
         const colors = {
             'PG Only': '#06b6d4',    // Cyan-600 to match Choose CSV button
@@ -546,12 +547,13 @@
 
         function renderTransactionLineChart(divId, transaction, selectedConc) {
             const x = transactionData.concs || [];
+            const useMultiplier = transaction !== BATCH_SIZE_TRANSACTION;
             const traces = categories.map(cat => ({
                 type: 'scatter',
                 mode: 'lines+markers',
                 name: cat,
                 x: x,
-                y: x.map(conc => (transactionData.means[conc]?.[cat]?.[transaction] || 0) * MS_MULTIPLIER),
+                y: x.map(conc => (transactionData.means[conc]?.[cat]?.[transaction] || 0) * (useMultiplier ? MS_MULTIPLIER : 1)),
                 line: { color: colors[cat] },
                 marker: { color: colors[cat], size: 6 }
             }));
@@ -566,7 +568,7 @@
                     tickfont: { color: '#e2e8f0' }
                 },
                 yaxis: {
-                    title: { text: `${transaction} (ms)`, font: { color: '#e2e8f0' } },
+                    title: { text: `${transaction}${useMultiplier ? ' (ms)' : ''}`, font: { color: '#e2e8f0' } },
                     tickfont: { color: '#e2e8f0' },
                     range: range,
                     gridcolor: 'rgba(255,255,255,0.1)'
@@ -636,6 +638,7 @@
             const barMeans = {};
             const barStds = {};
             const validCategories = [];
+            const useMultiplier = transaction !== BATCH_SIZE_TRANSACTION;
 
             categories.forEach(cat => {
                 let values = [];
@@ -646,8 +649,8 @@
                         const variance = concMeans.reduce((a, b) => a + Math.pow(b - meanOfMeans, 2), 0) / concMeans.length;
                         const std = Math.sqrt(variance);
                         values = [meanOfMeans];
-                        barMeans[cat] = meanOfMeans * MS_MULTIPLIER;
-                        barStds[cat] = std * MS_MULTIPLIER;
+                        barMeans[cat] = meanOfMeans * (useMultiplier ? MS_MULTIPLIER : 1);
+                        barStds[cat] = std * (useMultiplier ? MS_MULTIPLIER : 1);
                         validCategories.push(cat);
                     }
                 } else {
@@ -658,8 +661,8 @@
                         const variance = arr.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / arr.length;
                         const std = Math.sqrt(variance);
                         values = [mean];
-                        barMeans[cat] = mean * MS_MULTIPLIER;
-                        barStds[cat] = std * MS_MULTIPLIER;
+                        barMeans[cat] = mean * (useMultiplier ? MS_MULTIPLIER : 1);
+                        barStds[cat] = std * (useMultiplier ? MS_MULTIPLIER : 1);
                         validCategories.push(cat);
                     }
                 }
@@ -673,13 +676,18 @@
             const barError = validCategories.map(cat => isFinite(barStds[cat]) ? barStds[cat] : 0);
             const maxY = barY.length > 0 ? Math.max(...barY.map((y, i) => y + barError[i])) : 100;
             let range = niceRange(maxY);
-            range[1] = range[1] * 1.1; // Add 10% headroom for annotations
+            if (useMultiplier) {
+                range[1] = range[1] * 1.1; // Add 10% headroom for annotations
+            }
 
-            // Calculate theoretical TX/s for each category
-            const txPerSecond = validCategories.map(cat => {
-                const msValue = barY[validCategories.indexOf(cat)];
-                return calculateTXPerSecond(msValue);
-            });
+            // Calculate theoretical TX/s for each category (only for non-batch_size transactions)
+            let txPerSecond = [];
+            if (useMultiplier) {
+                txPerSecond = validCategories.map(cat => {
+                    const msValue = barY[validCategories.indexOf(cat)];
+                    return calculateTXPerSecond(msValue);
+                });
+            }
 
             if (validCategories.length === 0) {
                 const trace = {
@@ -703,7 +711,7 @@
                         categoryarray: categories
                     },
                     yaxis: {
-                        title: { text: `${transaction} (ms)`, font: { color: '#e2e8f0' } },
+                        title: { text: `${transaction}${useMultiplier ? ' (ms)' : ''}`, font: { color: '#e2e8f0' } },
                         tickfont: { color: '#e2e8f0' },
                         range: [0, 100],
                         gridcolor: 'rgba(255,255,255,0.1)'
@@ -770,7 +778,8 @@
                     width: 8
                 }
             };
-            const layout = {
+
+            let layout = {
                 template: 'plotly_dark',
                 xaxis: {
                     title: { text: 'Category', font: { color: '#e2e8f0' } },
@@ -779,7 +788,7 @@
                     categoryarray: validCategories
                 },
                 yaxis: {
-                    title: { text: `${transaction} (ms)`, font: { color: '#e2e8f0' } },
+                    title: { text: `${transaction}${useMultiplier ? ' (ms)' : ''}`, font: { color: '#e2e8f0' } },
                     tickfont: { color: '#e2e8f0' },
                     range: range,
                     gridcolor: 'rgba(255,255,255,0.1)'
@@ -788,8 +797,12 @@
                 margin: { t: 20, b: 50, l: 60, r: 20 },
                 showlegend: false,
                 plot_bgcolor: 'rgba(0,0,0,0)',
-                paper_bgcolor: '#0f172a',
-                annotations: validCategories.map((cat, index) => ({
+                paper_bgcolor: '#0f172a'
+            };
+
+            // Add TX/s annotations only for non-batch_size transactions
+            if (useMultiplier && txPerSecond.length > 0) {
+                layout.annotations = validCategories.map((cat, index) => ({
                     x: cat,
                     y: barY[index] + barError[index] + (range[1] * 0.02),
                     xref: 'x',
@@ -806,8 +819,9 @@
                     borderwidth: 1,
                     borderpad: 4,
                     opacity: 0.9
-                }))
-            };
+                }));
+            }
+
             Plotly.newPlot(divId, [trace], layout, {
                 responsive: true,
                 modeBarButtonsToRemove: ['select2d', 'lasso2d'],
@@ -1078,4 +1092,3 @@
     </script>
 </body>
 </html>
-
