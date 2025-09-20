@@ -1,6 +1,8 @@
 services:
   caddy:
-    image: caddy:2
+    build:
+      context: .
+      dockerfile: Dockerfile.caddy  # Clearly specifies which Dockerfile to use
     ports:
       - "80:80"
       - "443:443"

@@ -101,7 +101,7 @@ redis:
 
 # use caddy as reverse proxy for https
 caddy:
-	sudo docker-compose -f docker-compose-caddy.yml up
+	sudo docker-compose -f docker-compose-caddy.yml up -d
 
 
 # we don't use tee as it would die first and cause broken stdout/sterr pipes

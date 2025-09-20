@@ -1,0 +1,23 @@
+# Build Caddy with rate-limit module
+FROM caddy:2.10-builder-alpine AS builder
+
+RUN xcaddy build \
+    --with github.com/mholt/caddy-ratelimit
+
+# Runtime image
+FROM alpine:3.20
+
+# Install ca-certificates for HTTPS
+RUN apk add --no-cache ca-certificates mailcap
+
+# Copy custom Caddy binary
+COPY --from=builder /usr/bin/caddy /usr/bin/caddy
+
+# Setup volumes and ports
+VOLUME /config
+VOLUME /data
+EXPOSE 80 443
+
+# Run Caddy
+ENTRYPOINT ["/usr/bin/caddy"]
+CMD ["run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]

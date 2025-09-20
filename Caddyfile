@@ -1,3 +1,126 @@
 tigerfans.io {
+    # Global fallback - generous for demo traffic
+    rate_limit {
+        zone global {
+            key    {remote_ip}
+            events 100
+            window 1s
+            burst 200
+        }
+    }
+
+    # Landing page, static files, TigerBench - very generous
+    @lightpaths {
+        path / /bench /static/*
+    }
+    route @lightpaths {
+        rate_limit {
+            zone light {
+                key    {remote_ip}
+                events 200
+                window 1s
+                burst 500
+            }
+        }
+        reverse_proxy 172.31.35.107:8000
+    }
+
+    # Demo/checkout + MockPay - generous for user flow
+    @demoflow {
+        path /demo/* /mockpay/*
+    }
+    route @demoflow {
+        rate_limit {
+            zone demo {
+                key    {remote_ip}
+                events 50
+                window 1s
+                burst 100
+            }
+        }
+        reverse_proxy 172.31.35.107:8000
+    }
+
+    # API endpoints - moderate protection
+    @apipaths {
+        path /api/inventory /api/pending /api/admin/*
+    }
+    route @apipaths {
+        rate_limit {
+            zone api {
+                key    {remote_ip}
+                events 20
+                window 1s
+                burst 40
+            }
+        }
+        reverse_proxy 172.31.35.107:8000
+    }
+
+    # Heavy accounting operations - demo-friendly
+    @accounting {
+        path /api/checkout /api/accounting/*
+    }
+    route @accounting {
+        rate_limit {
+            zone accounting {
+                key    {remote_ip}
+                events 20
+                window 1s
+                burst 50
+            }
+        }
+        reverse_proxy 172.31.35.107:8000
+    }
+
+    # Order status polling - snappy for success page
+    @orderpoll {
+        path /api/orders/*
+    }
+    route @orderpoll {
+        rate_limit {
+            zone orders {
+                key    {remote_ip}
+                events 30
+                window 1s
+                burst 60
+            }
+        }
+        reverse_proxy 172.31.35.107:8000
+    }
+
+    # Webhook - high for MockPay
+    @webhook {
+        path /payments/webhook
+    }
+    route @webhook {
+        rate_limit {
+            zone webhook {
+                key    {remote_ip}
+                events 100
+                window 1s
+                burst 200
+            }
+        }
+        reverse_proxy 172.31.35.107:8000
+    }
+
+    # Admin dashboard - moderate
+    @admin {
+        path /admin/*
+    }
+    route @admin {
+        rate_limit {
+            zone admin {
+                key    {remote_ip}
+                events 10
+                window 1s
+                burst 20
+            }
+        }
+        reverse_proxy 172.31.35.107:8000
+    }
+
+    # Catch-all
     reverse_proxy 172.31.35.107:8000
 }
