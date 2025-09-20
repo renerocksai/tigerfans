@@ -48,10 +48,9 @@ which works very differently from rows in an SQL table.
 - **UI pages**: landing, checkout, success incl. QR-code download
 - **Admin dashboard** (basic, protected by HTTP Basic Auth)
 
-- **Load Testing Infra**: See [benchctl](./benchctl/),
-  [load test definitions](./load_tests/) and the [Makefile](./Makefile).
-- **[TigerBench](https://tigerfans.technologylab.ai/tigerbench)** for
-  visualizing recorded performance data.
+- **Load Testing Infra**: See the [bench](./bench/),
+  [load test definitions](./load_tests/db010/) and the [Makefile](./Makefile).
+- **[TigerBench](https://tigerfans.technologylab.ai/tigerbench)** for visualizing recorded performance data.
 
 > 📄 **See [doc/tigerbeetle.md](doc/tigerbeetle.md) for more details about how we
 model TigerBeetle accounts and transfers.**
