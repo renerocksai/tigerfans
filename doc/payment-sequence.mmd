@@ -1,3 +1,6 @@
+---
+title: Successful Order Flow
+---
 sequenceDiagram
     participant B as Browser
     participant S as FastAPI Backend
@@ -9,7 +12,7 @@ sequenceDiagram
     B->>+S: checkout (email, ticket class)
     S->>+T: PENDING (tickets, goodies)
     T-->>-S: OK (transfer_ids)
-    S->>+R: SAVE PaymentSession (order_id, TB ids, redirect_url, ttl, ...)
+    S->>+R: SAVE PaymentSession<br/>(ps_id, order_id, transfer ids, redirect_url, TTL, ...)
     R-->>-S: OK
     S-->>-B: go redirect to mockpay (redirect_url)
 
@@ -18,14 +21,14 @@ sequenceDiagram
     P-->>-M: payment session
     M-->>-B: mockpay HTML
 
-    B->>+M: click Success
+    B->>+M: click: Payment Successful
     M->>+S: PAYMENT_SUCCESS webhook
 
     S->>+R: GET PaymentSession
     R-->>-S: payment session
 
-    S->>+R: INSERT idempotency keys (ps_id, webhook)
-    R-->>-S: both EXIST NOT
+    S->>+R: INSERT idempotency keys<br/> (ps_id, webhook id)
+    R-->>-S: OK
 
     S->>+T: POST PENDING (ticket, goodie)
     T-->>-S: OK

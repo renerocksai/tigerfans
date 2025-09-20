@@ -52,8 +52,10 @@ which works very differently from rows in an SQL table.
   [load test definitions](./load_tests/db010/) and the [Makefile](./Makefile).
 - **[TigerBench](https://tigerfans.technologylab.ai/tigerbench)** for visualizing recorded performance data.
 
-> 📄 **See [doc/tigerbeetle.md](doc/tigerbeetle.md) for more details about how we
-model TigerBeetle accounts and transfers.**
+> 📄 **See [doc/tigerbeetle.md](doc/tigerbeetle.md) for more details about how
+> we model TigerBeetle accounts and transfers and
+> [payment-sequence.mmd](./doc/payment-sequence.mmd) for an illustration of a
+> successful payment.**
 
 ## First-time setup
 
