@@ -257,7 +257,7 @@ async def landing_page(request: Request):
     )
 
 
-@app.get("/tigerbench", response_class=HTMLResponse)
+@app.get("/bench", response_class=HTMLResponse)
 async def tigerbench_page(request: Request):
     return templates.TemplateResponse(
         "tigerbench.html",
