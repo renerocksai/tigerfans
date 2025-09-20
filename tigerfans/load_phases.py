@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 import os
-import sys
 import argparse
 import asyncio
 import base64
@@ -56,8 +55,8 @@ class Summary:
 
 
 def write_csv(
-    csv: str, tag: str, concurrency: int, webhook_mode: str, succeed_rate: float,
-    checkout_summary: Summary, webhook_summary: Summary,
+    csv: str, tag: str, concurrency: int, webhook_mode: str,
+    succeed_rate: float, checkout_summary: Summary, webhook_summary: Summary,
     reserve_summary, commit_summary,
     accounting_backend: str, paymentsessions_backend: str,
     db_pool_size: int, redis_max_conn: int,

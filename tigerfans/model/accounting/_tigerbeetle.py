@@ -67,96 +67,13 @@ def debug_event_loop():
     print(f"🔍 Cancelled tasks: {cancelled}")
 
 
-class TransferBatcher:
-    def __init__(self, client: tb.ClientAsync, max_batch_size: int = 8190,
-                 flush_timeout: float = 0.1):
-        self.client = client
-        self.max_batch_size = max_batch_size
-        self.flush_timeout = flush_timeout
-        self._lock = asyncio.Lock()
-        self._pending_transfers: List[tb.Transfer] = []
-        self._pending_completions: List[Tuple[int, int, asyncio.Future]] = []
-        self._flush_task: asyncio.Task | None = None
+class LiveBatcher:
+    """
+    Auto-batcher that just continuosly checks for new transfer batches.
+    While current transfers are sent to TB, more can be queued up.
+    Each batch completion triggers the next.
+    """
 
-    async def submit(
-        self, transfers: List[tb.Transfer]
-    ) -> List[tb.CreateTransferResult]:
-        # print("submit", [f"id={t.id}" for t in transfers])
-        if not transfers:
-            return []
-
-        async with self._lock:
-            start_index = len(self._pending_transfers)
-            self._pending_transfers.extend(transfers)
-            fut = asyncio.Future()
-            self._pending_completions.append(
-                (start_index, len(transfers), fut)
-            )
-
-            should_flush_now = (
-                len(self._pending_transfers) >= self.max_batch_size
-            )
-            should_schedule_delayed = (
-                self._flush_task is None or self._flush_task.done()
-            )
-
-        if should_flush_now:
-            # print("submit: flushing immediately")
-            await self._flush()
-        elif should_schedule_delayed:
-            # print("submit: scheduling delayed flush")
-            self._flush_task = asyncio.create_task(self._delayed_flush())
-
-        return await fut
-
-    async def _delayed_flush(self) -> None:
-        try:
-            await asyncio.sleep(self.flush_timeout)
-            await self._flush()
-        except asyncio.CancelledError:
-            # Clean cancellation - just exit
-            pass
-        except Exception as e:
-            print(f"_delayed_flush error: {e}")
-
-    async def _flush(self) -> None:
-        # Extract under lock
-        batch = None
-        completions = []
-        async with self._lock:
-            if not self._pending_transfers:
-                return
-            batch = self._pending_transfers[:]
-            completions = self._pending_completions[:]
-            self._pending_transfers = []
-            self._pending_completions = []
-
-            # Safe cancellation: only cancel if it's a different task
-            if (
-                self._flush_task and not self._flush_task.done() and
-                self._flush_task is not asyncio.current_task()
-            ):
-                # print("Safely cancelling previous flush task")
-                self._flush_task.cancel()
-                # Don't await it - let it clean up on its own
-            self._flush_task = None
-
-        # debug_event_loop()
-        error_results = await self.client.create_transfers(batch)
-
-        # Reconstruct full results: None for success, error for failures
-        full_results = [None] * len(batch)
-        for error_result in error_results:
-            full_results[error_result.index] = error_result
-
-        # Resolve futures
-        for start, num, fut in completions:
-            sub_slice = full_results[start:start + num]
-            sub_results = [r for r in sub_slice if r is not None]
-            fut.set_result(sub_results)
-
-
-class ChainedTransferBatcher:
     def __init__(self, client: tb.ClientAsync, max_batch_size: int = 8190):
         self.client = client
         self.max_batch_size = max_batch_size
@@ -319,6 +236,101 @@ class ChainedTransferBatcher:
         await self._next_batch_task
 
 
+class TimedBatcher(DeprecationWarning):
+    """
+    Auto-batcher that flushes = sends transfers on timeout or when max batch
+    size is reached.
+    Deprecated: use LiveBatcher from above.
+    """
+
+    def __init__(self, client: tb.ClientAsync, max_batch_size: int = 8190,
+                 flush_timeout: float = 0.1):
+        self.client = client
+        self.max_batch_size = max_batch_size
+        self.flush_timeout = flush_timeout
+        self._lock = asyncio.Lock()
+        self._pending_transfers: List[tb.Transfer] = []
+        self._pending_completions: List[Tuple[int, int, asyncio.Future]] = []
+        self._flush_task: asyncio.Task | None = None
+
+    async def submit(
+        self, transfers: List[tb.Transfer]
+    ) -> List[tb.CreateTransferResult]:
+        # print("submit", [f"id={t.id}" for t in transfers])
+        if not transfers:
+            return []
+
+        async with self._lock:
+            start_index = len(self._pending_transfers)
+            self._pending_transfers.extend(transfers)
+            fut = asyncio.Future()
+            self._pending_completions.append(
+                (start_index, len(transfers), fut)
+            )
+
+            should_flush_now = (
+                len(self._pending_transfers) >= self.max_batch_size
+            )
+            should_schedule_delayed = (
+                self._flush_task is None or self._flush_task.done()
+            )
+
+        if should_flush_now:
+            # print("submit: flushing immediately")
+            await self._flush()
+        elif should_schedule_delayed:
+            # print("submit: scheduling delayed flush")
+            self._flush_task = asyncio.create_task(self._delayed_flush())
+
+        return await fut
+
+    async def _delayed_flush(self) -> None:
+        try:
+            await asyncio.sleep(self.flush_timeout)
+            await self._flush()
+        except asyncio.CancelledError:
+            # Clean cancellation - just exit
+            pass
+        except Exception as e:
+            print(f"_delayed_flush error: {e}")
+
+    async def _flush(self) -> None:
+        # Extract under lock
+        batch = None
+        completions = []
+        async with self._lock:
+            if not self._pending_transfers:
+                return
+            batch = self._pending_transfers[:]
+            completions = self._pending_completions[:]
+            self._pending_transfers = []
+            self._pending_completions = []
+
+            # Safe cancellation: only cancel if it's a different task
+            if (
+                self._flush_task and not self._flush_task.done() and
+                self._flush_task is not asyncio.current_task()
+            ):
+                # print("Safely cancelling previous flush task")
+                self._flush_task.cancel()
+                # Don't await it - let it clean up on its own
+            self._flush_task = None
+
+        # debug_event_loop()
+        error_results = await self.client.create_transfers(batch)
+
+        # Reconstruct full results: None for success, error for failures
+        full_results = [None] * len(batch)
+        for error_result in error_results:
+            full_results[error_result.index] = error_result
+
+        # Resolve futures
+        for start, num, fut in completions:
+            sub_slice = full_results[start:start + num]
+            sub_results = [r for r in sub_slice if r is not None]
+            fut.set_result(sub_results)
+
+
 async def create_accounts(client: tb.ClientAsync):
     account_errors = await client.create_accounts([
         First_n_Operator,
@@ -388,7 +400,7 @@ async def initial_transfers(client: tb.ClientAsync):
 
 
 async def hold_tickets(
-    batcher: TransferBatcher, ticket_class: str,
+    batcher: LiveBatcher | TimedBatcher, ticket_class: str,
     qty: int, timeout_seconds: int,
 ) -> Tuple[str, str, bool, bool]:
     if ticket_class not in ['A', 'B']:
@@ -440,7 +452,7 @@ async def hold_tickets(
 
 
 async def book_immediately(
-    batcher: TransferBatcher, ticket_class: str,
+    batcher: LiveBatcher | TimedBatcher, ticket_class: str,
     qty: int,
 ) -> Tuple[str, str, bool, bool]:
     if ticket_class not in ['A', 'B']:
@@ -486,7 +498,7 @@ async def book_immediately(
 
 
 async def commit_order(
-    batcher: TransferBatcher,
+    batcher: LiveBatcher | TimedBatcher,
     tb_transfer_id: str | int, goodie_tb_transfer_id: str | int,
     ticket_class: str, qty: int, try_goodie: bool,
 ) -> Tuple[bool, bool]:
@@ -548,7 +560,7 @@ async def commit_order(
 
 
 async def cancel_only_goodie(
-    batcher: TransferBatcher,
+    batcher: LiveBatcher | TimedBatcher,
     goodie_tb_transfer_id: str | int
 ) -> None:
     if isinstance(goodie_tb_transfer_id, str):
@@ -574,7 +586,7 @@ async def cancel_only_goodie(
 
 
 async def cancel_order(
-    batcher: TransferBatcher,
+    batcher: LiveBatcher | TimedBatcher,
     tb_transfer_id: str | int, goodie_tb_transfer_id: str | int,
     ticket_class: str, qty: int,
 ) -> None:

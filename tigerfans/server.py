@@ -20,7 +20,7 @@ from .model.order import Base, Order
 from .model import accounting
 from .model.accounting import TicketAmount_first_n, BACKEND as ACCT_BACKEND
 from .model.accounting import create_accounts, initial_transfers
-from .model.accounting._tigerbeetle import ChainedTransferBatcher
+from .model.accounting._tigerbeetle import LiveBatcher
 from .model.accounting._postgres import GatedAsyncSession
 from .model.paymentsession import (
         PaymentSessionStore, new_store, BACKEND as PAYSESSION_BACKEND
@@ -98,7 +98,7 @@ def get_tb_client() -> tb.ClientAsync:
     return client
 
 
-def get_tb_batcher() -> ChainedTransferBatcher:
+def get_tb_batcher() -> LiveBatcher:
     if ACCT_BACKEND != "tb":
         raise RuntimeError("TigerBeetle backend not enabled")
     batcher = getattr(app.state, "tb_batcher", None)
@@ -124,7 +124,7 @@ async def accounting_client() -> tb.ClientAsync | AsyncSession:
         yield get_tb_client()
 
 
-async def batched_accounting_client() -> ChainedTransferBatcher | AsyncSession:
+async def batched_accounting_client() -> LiveBatcher | AsyncSession:
     if ACCT_BACKEND == 'pg':
         async with SessionAsync() as session:
             yield GatedAsyncSession(session=session, gated=gated)
@@ -191,7 +191,7 @@ async def _accounting_start():
         addr = os.getenv("TB_ADDRESS", "3000")
         cluster_id = int(os.getenv("TB_CLUSTER_ID", "0"))
         client = tb.ClientAsync(cluster_id=cluster_id, replica_addresses=addr)
-        batcher = ChainedTransferBatcher(client, max_batch_size=8190)
+        batcher = LiveBatcher(client, max_batch_size=8190)
         app.state.tb_client = client
         app.state.tb_batcher = batcher
         if await create_accounts(client):
@@ -272,6 +272,7 @@ async def tigerbench_page(request: Request):
         },
     )
 
+
 # ----------------------------
 # Checkout page (force 1 ticket, require email)
 # ----------------------------
@@ -287,7 +288,7 @@ async def demo_checkout_page(request: Request, status: Optional[str] = None,
 @app.post("/api/checkout")
 async def create_checkout(
     payload: dict,
-    ac: ChainedTransferBatcher | AsyncSession = Depends(batched_accounting_client),
+    ac: LiveBatcher | AsyncSession = Depends(batched_accounting_client),
     rs: PaymentSessionStore = Depends(paymentsessions),
 ):
     cls = payload.get("cls")
@@ -349,7 +350,7 @@ async def create_checkout(
 #  this endpoint is purely for measuring accounting performance
 @app.get("/api/accounting/reserve")
 async def perftest_accounting_reserve(
-    ac: ChainedTransferBatcher | AsyncSession = Depends(batched_accounting_client),
+    ac: LiveBatcher | AsyncSession = Depends(batched_accounting_client),
 ):
     async with timeit("accounting.hold"):
         tb_transfer_id, goodie_tb_transfer_id, ticket_ok, goodie_ok = (
@@ -368,7 +369,7 @@ async def perftest_accounting_reserve(
 @app.get("/api/accounting/commit")
 async def perftest_accounting_commit(
     tb_transfer_id: str, goodie_tb_transfer_id: str,
-    ac: ChainedTransferBatcher | AsyncSession = Depends(batched_accounting_client),
+    ac: LiveBatcher | AsyncSession = Depends(batched_accounting_client),
 ):
 
     async with timeit("accounting.commit_order"):
@@ -428,7 +429,7 @@ async def get_order(order_id: str, db: AsyncSession = Depends(get_db)):
 async def payments_webhook(
     request: Request,
     db: AsyncSession = Depends(get_db),
-    ac: ChainedTransferBatcher | AsyncSession = Depends(batched_accounting_client),
+    ac: LiveBatcher | AsyncSession = Depends(batched_accounting_client),
     rs: PaymentSessionStore = Depends(paymentsessions),
 ):
     payload = await request.body()
