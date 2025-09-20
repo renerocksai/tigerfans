@@ -1,0 +1,43 @@
+sequenceDiagram
+    participant B as Browser
+    participant S as FastAPI Backend
+    participant T as TigerBeetle
+    participant R as Redis
+    participant P as Postgres
+    participant M as MockPay
+
+    B->>+S: checkout (email, ticket class)
+    S->>+T: PENDING (tickets, goodies)
+    T-->>-S: OK (transfer_ids)
+    S->>+R: SAVE PaymentSession (order_id, TB ids, redirect_url, ttl, ...)
+    R-->>-S: OK
+    S-->>-B: go redirect to mockpay (redirect_url)
+
+    B->>+M: redirect to MockPay
+    M->>+P: GET PaymentSession
+    P-->>-M: payment session
+    M-->>-B: mockpay HTML
+
+    B->>+M: click Success
+    M->>+S: PAYMENT_SUCCESS webhook
+
+    S->>+R: GET PaymentSession
+    R-->>-S: payment session
+
+    S->>+R: INSERT idempotency keys (ps_id, webhook)
+    R-->>-S: both EXIST NOT
+
+    S->>+T: POST PENDING (ticket, goodie)
+    T-->>-S: OK
+
+    S->>+P: INSERT Order (status=paid, …)
+    P-->>-S: OK
+
+    S-->>-M: Webhook OK → redirect to success page
+    M-->>-B: redirect to success page
+
+    B->>+S: request success page
+    S->>+P: GET Order
+    P-->>-S: order
+    S-->>-B: success page HTML
+
