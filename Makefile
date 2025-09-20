@@ -52,15 +52,34 @@ server-w3:
 	uvicorn tigerfans.server:app --host 0.0.0.0 --port 8000 --workers=3 --no-access-log
 
 # this is only for the mac. on prod, we use native postgres w/o docker
+# psql:
+# 	docker run -d --name pg \
+# 	-e POSTGRES_USER=$(POSTGRES_USER) \
+# 	-e POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) \
+# 	-e POSTGRES_DB=$(POSTGRES_DB) \
+# 	-p 5432:5432 \
+# 	-v pgdata:/var/lib/postgresql/data \
+# 	--shm-size=512m \
+# 	postgres:16
+
+# more production-like postgres config
 psql:
-	docker run -d --name pg \
-	-e POSTGRES_USER=$(POSTGRES_USER) \
-	-e POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) \
-	-e POSTGRES_DB=$(POSTGRES_DB) \
-	-p 5432:5432 \
-	-v pgdata:/var/lib/postgresql/data \
-	--shm-size=512m \
-	postgres:16
+	@echo "Starting PostgreSQL ..."
+	${SUDO} docker run -d \
+		--name pg \
+		-e POSTGRES_USER=$(POSTGRES_USER) \
+		-e POSTGRES_PASSWORD=$(POSTGRES_PASSWORD) \
+		-e POSTGRES_DB=$(POSTGRES_DB) \
+		-v pgdata:/var/lib/postgresql/data \
+		-p 5432:5432 \
+		--restart unless-stopped \
+		postgres:16 postgres \
+		-c shared_buffers=1GB \
+		-c wal_compression=on \
+		-c checkpoint_timeout=5min \
+		-c max_wal_size=2GB \
+		-c effective_io_concurrency=200
+	@echo "PostgreSQL started"
 
 # redis with TCP and UNIX socket
 redis:
