@@ -317,8 +317,8 @@ def main():
         help='Server command (default: "make server")'
     )
     ap.add_argument(
-        "--load-cmd", default=f"{sys.executable} -m tigerfans.load_phases",
-        help='Load test command (default: "python -m tigerfans.load_phases")'
+        "--load-cmd", default=f"{sys.executable} -m bench.load_phases",
+        help='Load test command (default: "python -m bench.load_phases")'
     )
 
     # everything after -- goes to the load test command

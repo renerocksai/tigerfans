@@ -91,7 +91,7 @@ load-tests:
 	@echo "==> Running load tests, output is being logged to $(LT_OUTPUT).log"
 	@echo "==> Use: tail -f $(LT_OUTPUT).log"
 	@find $(LT_ENV_DIR) -name '$(LT_ENV_GLOB)' | \
-	python -m benchctl --env-file=- --csv-file=$(LT_OUTPUT).csv \
+	python -m bench --env-file=- --csv-file=$(LT_OUTPUT).csv \
 	  --server-cmd='$(LT_SERVER_CMD)' --repeat=$(LT_REPEAT) \
 	>> $(LT_OUTPUT).log 2>&1
 
@@ -102,6 +102,6 @@ load-tests-mock:
 	@echo "==> Running mock load tests, output is being logged to $(LT_OUTPUT).log"
 	@echo "==> Use: tail -f $(LT_OUTPUT).log"
 	@find $(LT_ENV_DIR) -name '$(LT_ENV_GLOB)' | \
-	python -m benchctl --env-file=- --csv-file=$(LT_OUTPUT).csv \
+	python -m bench --env-file=- --csv-file=$(LT_OUTPUT).csv \
 	  --server-cmd='sleep 60' --repeat=$(LT_REPEAT) \
 	>> $(LT_OUTPUT).log 2>&1
