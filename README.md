@@ -115,8 +115,8 @@ To run TigerFans in a more production-like environment, we recommend:
 - PostgreSQL installed natively. See our [postgresql.conf](./postgresql.conf).
   - For a quick start, you can run PostgreSQL in docker. See
     [Makefile](./Makefile) target `psql` for an example.
-- Start uvicorn with 3 workers on a 4-CPU machine. (Makefile target
-  `server-w3`).
+- Start uvicorn with 1 worker on a 4-CPU machine. (Makefile target
+  `server-w1`).
 - Tigerbeetle in development mode (single node) on the same node seems fine.
   (Makefile target `tb`).
 - Use [Caddy](https://caddyserver.com) as reverse proxy for HTTPS support. See
