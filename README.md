@@ -2,7 +2,7 @@
 
 _Resource reservations, payment flows, and consistency — in one clean demo._
 
-See a live-demo [here](https://tigerfans.technologylab.ai)!
+See a live-demo [here](https://tigerfans.io)!
 
 TigerFans is a prototype **ticketing system demo** that shows how
 **[TigerBeetle](https://tigerbeetle.com)** can be applied beyond financial
@@ -50,12 +50,14 @@ which works very differently from rows in an SQL table.
 
 - **Load Testing Infra**: See the [bench](./bench/),
   [load test definitions](./load_tests/db010/) and the [Makefile](./Makefile).
-- **[TigerBench](https://tigerfans.technologylab.ai/tigerbench)** for visualizing recorded performance data.
+- **[TigerBench](https://tigerfans.io/bench)** for visualizing recorded performance data.
 
-> 📄 **See [doc/tigerbeetle.md](doc/tigerbeetle.md) for more details about how
-> we model TigerBeetle accounts and transfers and
-> [payment-sequence.mmd](./doc/payment-sequence.mmd) for an illustration of a
-> successful payment.**
+## 📄 Documents
+
+- [doc/tigerbeetle.md](doc/tigerbeetle.md) for more details about how we model
+  TigerBeetle accounts and transfers.
+- [payment-sequence.mmd](./doc/payment-sequence.mmd) for an illustration of
+ a successful payment.
 
 ## First-time setup
 

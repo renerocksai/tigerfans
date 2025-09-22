@@ -160,7 +160,7 @@ Goodies: if applicable
 If you want to see how we implemented all of the above, please check the source
 code.
 
-- [model/tigerbeetledb.py](../tigerfans/model/tigerbeetledb.py) has all the
+- [_tigerbeetledb.py](../tigerfans/model/accounting/_tigerbeetle.py) has all the
   TigerBeetle accounts and transfers.
 - Check out how [server.py](../tigerfans/server.py) uses them to model the
   flows we illustrated above.
