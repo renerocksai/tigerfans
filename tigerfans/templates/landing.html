@@ -1,8 +1,8 @@
 {% extends "base.html" %}
 {% set site_name = "TigerFans" %}
 {% set conf_date = "Dec 3–4, 2025" %}
-{% set conf_tagline = "A fictional conference for people who love fast, correct systems." %}
-{% block title %}{{ site_name }} — {{ conf_tagline }}{% endblock %}
+{% set conf_tagline = "A <span class='text-brand-400'>fictional</span> conference for people who love fast, correct systems." %}
+{% block title %}{{ site_name }} — {{ conf_tagline | striptags}}{% endblock %}
 
 {% block hero %}
 <section class="relative overflow-hidden">
@@ -13,7 +13,7 @@
         <h1 class="text-4xl sm:text-6xl font-extrabold leading-tight">
           {{ site_name }} <span class="text-brand-400">2025</span>
         </h1>
-        <p class="mt-4 text-lg text-slate-300">{{ conf_tagline }}</p>
+        <p class="mt-4 text-lg text-slate-300">{{ conf_tagline | safe }}</p>
         <p class="mt-2 text-slate-400">{{ conf_date }}</p>
         <div class="mt-8 flex flex-wrap gap-3">
           <a href="/demo/checkout" class="px-6 py-3 squircle bg-brand-500 hover:bg-brand-400 text-white font-medium transition">Order now</a>
