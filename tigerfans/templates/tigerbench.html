@@ -160,30 +160,32 @@
             </div>
         </div>
         <div id="operations-view" class="space-y-6">
-        <div class="max-w-3xl mx-auto bg-slate-900/50 border border-slate-700 rounded-lg p-4 mb-6">
-            <h3 class="text-sm font-semibold text-slate-200 mb-3">Operations Explained</h3>
-            <div class="text-sm text-slate-400 space-y-2">
-                <p>
-                    The <strong>Reserve</strong> and <strong>Commit</strong> phases are focused benchmarks that operate only on the accounting system to measure its theoretical maximum throughput.
-                </p>
-                <p>
-                    <strong class="font-medium text-slate-300">Reserve:</strong>
-                    The initial accounting operation to provisionally secure a "ticket" resource.
-                </p>
-                <p>
-                    <strong class="font-medium text-slate-300">Commit:</strong>
-                    The final accounting operation to permanently issue a "ticket" resource.
-                </p>
-                <p>
-                    <strong class="font-medium text-slate-300">Checkout:</strong>
-                    Simulates the complete user-facing process of reserving a ticket before payment.
-                </p>
-                <p>
-                    <strong class="font-medium text-slate-300">Webhook:</strong>
-                    Simulates the  backend processing that occurs after a successful payment confirmation.
-                </p>
+
+            <div class="max-w-3xl mx-auto bg-slate-900/50 border border-slate-700 rounded-lg p-4 mb-6">
+                <h3 class="text-sm font-semibold text-slate-200 mb-3">Operations Explained</h3>
+                <div class="text-sm text-slate-400 space-y-2">
+                    <p>
+                            The <strong>Reserve</strong> and <strong>Commit</strong> phases are focused benchmarks designed to measure the theoretical maximum throughput of <strong>our API</strong> when handling direct accounting operations.
+                    </p>
+                    <p>
+                        <strong class="font-medium text-slate-300">Reserve:</strong>
+                        The initial accounting operation to provisionally secure a "ticket" resource.
+                    </p>
+                    <p>
+                        <strong class="font-medium text-slate-300">Commit:</strong>
+                        The final accounting operation to permanently issue a "ticket" resource.
+                    </p>
+                    <p>
+                        <strong class="font-medium text-slate-300">Checkout:</strong>
+                        Simulates the complete user-facing process of reserving a ticket before payment.
+                    </p>
+                    <p>
+                        <strong class="font-medium text-slate-300">Webhook:</strong>
+                        Simulates the backend processing that occurs after a successful payment confirmation.
+                    </p>
+                </div>
             </div>
-        </div>
+
             <div class="text-center">
                 <h2 class="text-2xl font-bold text-green-400 mb-2">↑ HIGHER = BETTER</h2>
             </div>
