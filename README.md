@@ -123,8 +123,7 @@ To run TigerFans in a more production-like environment, we recommend:
   the `caddy` target in the [Makefile](./Makefile) and
   [docker-compose-caddy](./docker-compose-caddy.yml).
 
-On a `c7g.xlarge` EC2 instance, we achieve O(1.7) = 110 tickets per second with
-above setup and a top score of O(1.99) = 129.3 tickets per second:
+On a `c7g.xlarge` EC2 instance, we achieve 135.0 tickets per second:
 
 ```console
 $ cd tigerfans
@@ -132,8 +131,8 @@ $ python load_client.py --base http://localhost:8000 --total 1000 --concurrency 
 
 === Load Summary ===
 Total: 1000   OK: 1000   PAID: 1000   FAILED: 0   CANCELED: 0   TIMEOUT: 0   ERROR: 0
-Latency (observed order resolution): avg 0.041s   p50 0.042s   p90 0.083s   p99 0.164s
-Wall time: 7.736s   Throughput: 129.3 ops/s
+Latency (observed order resolution): avg 0.011s   p50 0.011s   p90 0.015s   p99 0.026s
+Wall time: 7.407s   Throughput: 135.0 ops/s
 ```
 
 
